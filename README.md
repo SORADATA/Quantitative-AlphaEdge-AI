@@ -357,7 +357,6 @@ Special thanks to:
 
 **Developed by [SORADATA](https://github.com/SORADATA)**
 
-*Master 2 Statistics & Econometrics | Université de Lorraine*
 
 [![GitHub followers](https://img.shields.io/github/followers/SORADATA?style=social)](https://github.com/SORADATA)
 [![Twitter Follow](https://img.shields.io/twitter/follow/SORADATA?style=social)](https://twitter.com/SORADATA)
