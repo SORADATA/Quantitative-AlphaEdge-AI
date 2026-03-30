@@ -1,7 +1,7 @@
 {
   "market_name": "CAC 40 (France)",
-  "last_update": "2026-03-27T18:48:32.347374",
-  "data_start": "2016-03-29T00:00:00",
+  "last_update": "2026-03-30T19:54:05.797205",
+  "data_start": "2016-03-30T00:00:00",
   "n_assets_tracked": 40,
   "current_allocation": {
     "TTE.PA": 1.0
