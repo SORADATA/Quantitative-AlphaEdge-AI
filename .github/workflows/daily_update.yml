@@ -2,9 +2,8 @@ name: Daily Portfolio Analytics
 
 on:
   schedule:
-    # Lundi-Vendredi à 17:00 UTC (18:00 CET / 19:00 CEST)
-    - cron: '0 17 * * 1-5'
-  
+    # Lundi-Vendredi à 21:00 UTC pour s'assurer que les données API sont à jour
+    - cron: '0 21 * * 1-5'  
   workflow_dispatch:  # Bouton manuel
 
 permissions:
