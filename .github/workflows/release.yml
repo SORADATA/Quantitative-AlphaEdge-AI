@@ -27,15 +27,7 @@ jobs:
           node-version: 23
 
       - name: Install dependencies
-        run: |
-          npm install \
-            semantic-release \
-            @semantic-release/commit-analyzer \
-            @semantic-release/release-notes-generator \
-            @semantic-release/changelog \
-            @semantic-release/git \
-            @semantic-release/github
-            conventional-changelog-conventionalcommits
+        run: npm install semantic-release @semantic-release/commit-analyzer @semantic-release/release-notes-generator @semantic-release/changelog @semantic-release/git @semantic-release/github conventional-changelog-conventionalcommits
 
       - name: Run semantic-release
         env:
