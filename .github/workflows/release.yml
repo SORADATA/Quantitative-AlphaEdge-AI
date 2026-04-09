@@ -4,22 +4,22 @@ on:
   push:
     branches:
       - main
-      - pre-release # branche de pré-production
+      - pre-release
 
 jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # Pour créer des tags et releases
-      issues: write     # Pour commenter les issues liées
-      pull-requests: write # Pour commenter les PR liées
+      contents: write
+      issues: write
+      pull-requests: write
       
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 0 # Important : semantic-release a besoin de tout l'historique
+          fetch-depth: 0
 
       - name: Use Node.js
         uses: actions/setup-node@v4
@@ -27,10 +27,7 @@ jobs:
           node-version: 23
 
       - name: Install dependencies
-        # On utilise "npm install" si pas de package-lock.json, 
-        # sinon "npm ci" est préférable.
-        run: |
-          npm install @semantic-release/commit-analyzer @semantic-release/release-notes-generator @semantic-release/github
+        run: npm install semantic-release @semantic-release/commit-analyzer @semantic-release/release-notes-generator @semantic-release/changelog @semantic-release/git @semantic-release/github conventional-changelog-conventionalcommits
 
       - name: Run semantic-release
         env:
