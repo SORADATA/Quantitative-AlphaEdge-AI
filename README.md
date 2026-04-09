@@ -8,9 +8,11 @@ Combining Unsupervised Learning, XGBoost & Modern Portfolio Theory for Automated
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://cac40-smart-portfolio-asset.streamlit.app/)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation?color=orange&label=version)](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Maintenance](https://img.shields.io/badge/Maintained%3F-yes-green.svg)](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/graphs/commit-activity)
+![Daily Pipeline](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/actions/workflows/daily_run.yml/badge.svg)
 
 [🌐 **Live Dashboard**](https://cac40-smart-portfolio-asset.streamlit.app/) • [📊 **View Results**](#-performance-metrics) • [🚀 **Quick Start**](#-quick-start) • [🐛 **Report Issue**](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/issues)
 
