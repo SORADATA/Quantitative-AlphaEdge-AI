@@ -1,10 +1,9 @@
 {
   "market_name": "CAC 40 (France)",
-  "last_update": "2026-04-28T23:56:29.792243",
-  "data_start": "2016-04-28T00:00:00",
+  "last_update": "2026-04-29T23:58:41.910987",
+  "data_start": "2016-04-29T00:00:00",
   "n_assets_tracked": 40,
   "current_allocation": {
-    "STMPA.PA": 0.77061,
-    "VIE.PA": 0.22939
+    "STMPA.PA": 1.0
   }
 }
