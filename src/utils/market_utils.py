@@ -25,15 +25,29 @@ def get_benchmark_returns(
             progress=False,
             auto_adjust=False,
         )
-        prices = (
-            raw["Close"].iloc[:, 0]
-            if isinstance(raw.columns, pd.MultiIndex)
-            else raw["Close"]
-        )
-        return prices.reindex(reindex_to, method="ffill").pct_change().fillna(0)
 
-    except Exception as exc:
-        logger.warning(f"Benchmark download failed ({exc}). Using zero returns.")
+        if raw.empty:
+            logger.error(f"No data found for benchmark {benchmark_ticker}")
+            return pd.Series(0.0, index=reindex_to)
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            prices = raw["Close"].iloc[:, 0]
+        else:
+            prices = raw["Close"]
+
+        prices.index = prices.index.tz_localize(None)
+        reindex_to = reindex_to.tz_localize(None)
+
+        bench_returns = (
+            prices.pct_change()
+            .reindex(reindex_to, method="ffill")
+            .fillna(0)
+        )
+        
+        return bench_returns
+
+    except Exception as e:
+        logger.error(f"Benchmark processing failed: {e}")
         return pd.Series(0.0, index=reindex_to)
 
 
