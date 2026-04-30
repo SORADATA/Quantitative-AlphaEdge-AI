@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/compare/v1.2.0...v1.3.0) (2026-04-30)
+
+### Features
+
+* Add load_market_config ([e879344](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/e879344c911ee448e03328ec4a79ace9c912cc3f))
+
 ## [1.2.0](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/compare/v1.1.0...v1.2.0) (2026-04-09)
 
 ### Features
