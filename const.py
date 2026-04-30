@@ -7,7 +7,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-MODEL_DIR = BASE_DIR / "models"
+MODEL_DIR = BASE_DIR / 'src' / 'models'
 LOG_DIR = BASE_DIR / "logs"
 CONFIG_FILE = BASE_DIR / "config" / "market_config.json"
 
@@ -22,7 +22,7 @@ RISK_FREE_RATE:    float = 0.03
 # ML SIGNAL
 # =============================================================================
 
-TARGET_CLUSTER:   int = 0
+TARGET_CLUSTER:   int = 3
 PROBA_THRESHOLD:  float = 0.6
 
 FEATURE_COLS: list[str] = [
