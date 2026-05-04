@@ -1,10 +1,9 @@
 {
     "market_name": "CAC 40 (France)",
-    "last_update": "2026-05-01T23:52:38.585336",
+    "last_update": "2026-05-04T23:58:56.734993",
     "n_assets_tracked": 40,
     "current_allocation": {
-        "CA.PA": 0.3333333333333333,
-        "STMPA.PA": 0.3333333333333333,
-        "VIE.PA": 0.3333333333333333
+        "STMPA.PA": 0.5,
+        "TEP.PA": 0.5
     }
 }
