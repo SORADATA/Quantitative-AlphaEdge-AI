@@ -13,9 +13,27 @@ transaction:
 
 strategy:
   target_cluster: 3
-  proba_threshold: 0.55
+  #proba_threshold: 0.55
   weight_bounds: [0.02, 0.25]
   lookback_days: 252
+  proba_threshold: 0.6
+  feature_cols:
+    - rsi
+    - macd
+    - bb_low
+    - bb_high
+    - atr
+    - return_2m
+    - return_3m
+    - return_6m
+    - euro_volume_lag1
+    - garman_klass_vol_lag1
+    - Mkt-RF_lag1
+    - SMB_lag1
+    - HML_lag1
+    - RMW_lag1
+    - CMA_lag1
+    - cluster
 
 benchmark:
   ticker: "^FCHI"           # CAC40
