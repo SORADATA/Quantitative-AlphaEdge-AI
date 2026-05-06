@@ -13,6 +13,9 @@ import time
 import os
 from typing import Dict, Any, List
 
+# =============================================================================
+# 1. CONFIGURATION ET STYLE
+# =============================================================================
 st.set_page_config(
     page_title="AlphaEdge Dashboard",
     layout="wide",
@@ -59,12 +62,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# =============================================================================
+# 2. CHARGEMENT DYNAMIQUE DES CONFIGURATIONS ET DONNÉES (CLOUD HF)
+# =============================================================================
+
+
 def load_market_config(config_name: str) -> Dict[str, Any]:
     target_path = CONFIG_DIR / config_name
     default_fallback = {
-        "market_name": "CAC 40",
-        "benchmark_ticker": "^FCHI",
-        "currency": "EUR",
+        "market_name": "Unknown Market",
+        "benchmark_ticker": "^GSPC",
+        "currency": "USD",
         "assets": []
     }
     if not target_path.exists():
@@ -75,38 +83,45 @@ def load_market_config(config_name: str) -> Dict[str, Any]:
     except Exception:
         return default_fallback
 
-@st.cache_data(ttl=600, show_spinner=False)
-
-
-def load_all_data():
-    history_file = BASE_DIR / 'portfolio_history.csv'
-    signals_file = BASE_DIR / 'latest_signals.csv'
-    rebalance_file = BASE_DIR / 'rebalance_history.csv'
+@st.cache_data(ttl=3600, show_spinner=False) # TTL augmenté à 1h pour optimiser les perfs
+def load_all_data(config_filename: str):
+    """Charge les fichiers Parquet directement depuis Hugging Face."""
+    suffix = config_filename.replace('.json', '')
+    repo_id = "soradata/alphaedge-data"
+    base_url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/data"
     df_hist = pd.DataFrame()
     df_signals = pd.DataFrame()
     df_rebalance = pd.DataFrame()
     errors = []
 
-    if history_file.exists():
+    # Fonction utilitaire pour fetch les parquets
+    def fetch_hf_parquet(file_prefix):
+        url = f"{base_url}/{file_prefix}_{suffix}.parquet"
         try:
-            df_hist = pd.read_csv(history_file, index_col=0)
-            df_hist.index = pd.to_datetime(df_hist.index, format='mixed', errors='coerce')
-            df_hist = df_hist[df_hist.index.notna()].sort_index(ascending=True)
+            return pd.read_parquet(url)
         except Exception as e:
-            errors.append(f"Portfolio error: {e}") 
-    if signals_file.exists():
-        try:
-            df_signals = pd.read_csv(signals_file)
-        except Exception as e:
-            errors.append(f"Signals error: {e}")       
-    if rebalance_file.exists():
-        try:
-            df_rebalance = pd.read_csv(rebalance_file, index_col=0)
-            df_rebalance.index = pd.to_datetime(df_rebalance.index)
-        except Exception as e:
-            errors.append(f"Rebalance error: {e}")        
+            errors.append(f"Impossible de charger {file_prefix}_{suffix}.parquet depuis HF")
+            return pd.DataFrame()
+
+    # 1. Historique du Portfolio
+    df_hist = fetch_hf_parquet("portfolio_history")
+    if not df_hist.empty:
+        df_hist.index = pd.to_datetime(df_hist.index, errors='coerce')
+        df_hist = df_hist[df_hist.index.notna()].sort_index(ascending=True)
+
+    # 2. Signaux Actuels
+    df_signals = fetch_hf_parquet("latest_signals")
+
+    # 3. Historique de Rebalancement
+    df_rebalance = fetch_hf_parquet("rebalance_history")
+    if not df_rebalance.empty:
+        df_rebalance.index = pd.to_datetime(df_rebalance.index, errors='coerce')
+
     return df_hist, df_signals, df_rebalance, errors
 
+# =============================================================================
+# 3. FONCTIONS MÉTIERS ET CALCULS
+# =============================================================================
 
 def display_kpi_card(label, value, is_percent=True, color_code=False, prefix="", minimal=False):
     if pd.isna(value) or np.isinf(value):
@@ -121,7 +136,6 @@ def display_kpi_card(label, value, is_percent=True, color_code=False, prefix="",
             html_val = f'<span class="kpi-value">{formatted_val}</span>'
     css_class = "kpi-minimal" if minimal else "kpi-container"
     st.markdown(f'<div class="{css_class}"><div class="kpi-label">{label}</div>{html_val}</div>', unsafe_allow_html=True)
-
 
 def calculate_metrics(df):
     if df.empty or len(df) < 2:
@@ -173,16 +187,32 @@ def get_live_ticker_data(ticker, period="1y"):
             time.sleep(1)
     return pd.DataFrame()
 
-with st.spinner("Loading..."):
-    df_hist, df_signals, df_rebalance, load_errors = load_all_data()
+# =============================================================================
+# 4. SIDEBAR ET NAVIGATION
+# =============================================================================
 
 st.sidebar.title("AlphaEdge")
 st.sidebar.caption("Quantitative Asset Allocation")
 
-available_configs = [f for f in os.listdir(CONFIG_DIR) if f.endswith('.json')] if CONFIG_DIR.exists() else []
-selected_config = st.sidebar.selectbox("Market Selection", available_configs, index=0 if "cac40.json" not in available_configs else available_configs.index("cac40.json"))
+# Sélection du Marché
+available_configs = sorted([f for f in os.listdir(CONFIG_DIR) if f.endswith('.json')]) if CONFIG_DIR.exists() else []
+if not available_configs:
+    st.sidebar.error("No configuration files found in /config")
+    st.stop()
+
+selected_config = st.sidebar.selectbox(
+    "Market Selection", 
+    available_configs, 
+    index=available_configs.index("cac40.json") if "cac40.json" in available_configs else 0
+)
+
+# Chargement immédiat de la config et des données liées depuis Hugging Face
 MARKET_CONFIG = load_market_config(selected_config)
 CURRENCY_SYMBOL = "€" if MARKET_CONFIG.get("currency") == "EUR" else "$"
+
+with st.sidebar:
+    with st.spinner(f"Fetching {MARKET_CONFIG.get('market_name')} data from Cloud..."):
+        df_hist, df_signals, df_rebalance, load_errors = load_all_data(selected_config)
 
 if st.sidebar.button("Force Sync Pipeline"):
     st.cache_data.clear()
@@ -195,7 +225,16 @@ page = st.sidebar.radio("Navigation", ["Dashboard", "Daily Signals", "Data Explo
 if not df_hist.empty:
     last_dt = df_hist.index[-1]
     st.sidebar.info(f"Last Update: {last_dt.date()}")
-    st.sidebar.markdown("🟢 System Online" if (datetime.now() - last_dt).days <= 1 else "🔴 Update Required")
+    st.sidebar.markdown("🟢 Cloud Sync: Active" if (datetime.now() - last_dt).days <= 1 else "🔴 Update Required")
+
+if load_errors:
+    with st.sidebar.expander("Cloud Sync Issues", expanded=False):
+        for err in load_errors:
+            st.warning(err)
+
+# =============================================================================
+# 5. LOGIQUE DES PAGES
+# =============================================================================
 
 if page == "Dashboard":
     st.title(f"Portfolio Overview: {MARKET_CONFIG.get('market_name')}")
@@ -219,57 +258,79 @@ if page == "Dashboard":
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_base.index, y=df_base['Strategy'], name='Strategy', line=dict(color='#00CC96', width=2), fill='tonexty', fillcolor='rgba(0, 204, 150, 0.1)'))
         fig.add_trace(go.Scatter(x=df_base.index, y=df_base['Benchmark'], name='Benchmark', line=dict(color='#8b92a5', width=1, dash='dash')))
-        fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=0, t=10, b=0), hovermode="x unified")
+        fig.update_layout(template="plotly_dark", height=450, margin=dict(l=0, r=0, t=10, b=0), hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("No historical data found in the Cloud for this market. Please run the daily pipeline.")
 
 elif page == "Daily Signals":
-    st.title("Daily Trading Signals")
+    st.title(f"📡 Trading Signals: {MARKET_CONFIG.get('market_name')}")
     if not df_signals.empty:
-        st.dataframe(df_signals, use_container_width=True, height=500, hide_index=True,
+        st.dataframe(df_signals, use_container_width=True, height=600, hide_index=True,
             column_config={
                 "Allocation": st.column_config.ProgressColumn("Weight", format="%.2f", min_value=0, max_value=1),
                 "Proba_Hausse": st.column_config.NumberColumn("Probability ↑", format="%.1f%%")
             })
+    else:
+        st.info("No active signals found for this selection.")
 
 elif page == "Data Explorer":
-    st.title("Market Data Explorer")
-    tickers = MARKET_CONFIG.get("assets", [])
-    selected_ticker = st.selectbox("Select Asset", tickers if tickers else (df_signals['Ticker'].tolist() if not df_signals.empty else []))
-    df_asset = get_live_ticker_data(selected_ticker)
-    if not df_asset.empty:
-        m1, m2, m3, m4 = st.columns(4)
-        last_price = df_asset['adj close'].iloc[-1]
-        daily_var = (last_price / df_asset['adj close'].iloc[-2]) - 1
-        with m1: display_kpi_card("Price", last_price, is_percent=False, prefix=f"{CURRENCY_SYMBOL} ")
-        with m2: display_kpi_card("Change", daily_var, color_code=True)
-        
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-        fig.add_trace(go.Candlestick(x=df_asset.index, open=df_asset['open'], high=df_asset['high'], low=df_asset['low'], close=df_asset['close'], name='Price'), row=1, col=1)
-        fig.add_trace(go.Bar(x=df_asset.index, y=df_asset['volume'], name='Volume'), row=2, col=1)
-        fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=600)
-        st.plotly_chart(fig, use_container_width=True)
+    st.title("🔎 Market Data Explorer")
+    # Tickers depuis la config OU les signaux chargés
+    config_tickers = MARKET_CONFIG.get("assets", [])
+    df_tickers = df_signals['Ticker'].unique().tolist() if not df_signals.empty else []
+    final_tickers = sorted(list(set(config_tickers + df_tickers)))
+    
+    if final_tickers:
+        selected_ticker = st.selectbox("Select Asset", final_tickers)
+        with st.spinner("Downloading live data..."):
+            df_asset = get_live_ticker_data(selected_ticker)
+            
+        if not df_asset.empty:
+            m1, m2, m3, m4 = st.columns(4)
+            last_price = df_asset['adj close'].iloc[-1]
+            daily_var = (last_price / df_asset['adj close'].iloc[-2]) - 1 if len(df_asset) > 1 else 0
+            with m1: display_kpi_card("Last Price", last_price, is_percent=False, prefix=f"{CURRENCY_SYMBOL} ")
+            with m2: display_kpi_card("Daily Change", daily_var, color_code=True)
+            
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
+            fig.add_trace(go.Candlestick(x=df_asset.index, open=df_asset['open'], high=df_asset['high'], low=df_asset['low'], close=df_asset['close'], name='Price'), row=1, col=1)
+            fig.add_trace(go.Bar(x=df_asset.index, y=df_asset['volume'], name='Volume', marker_color='#8b92a5'), row=2, col=1)
+            fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=600, margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("No tickers available to explore.")
 
 elif page == "Model Details":
-    st.title("Model Configuration")
-    st.info("Strategy: XGBoost Prediction + K-Means Regime Detection + Markowitz Optimization")
+    st.title("⚙️ Model Configuration")
+    st.info("Architecture: XGBoost (Prediction) + K-Means (Regime) + Markowitz (Optimization)")
     metrics_path = BASE_DIR / "src" / "models" / "metrics.json"
     if metrics_path.exists():
         with open(metrics_path, "r") as f:
-            m = json.load(f)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Accuracy", f"{m.get('accuracy', 0):.1%}")
-            c2.metric("Precision", f"{m.get('precision', 0):.1%}")
-            c3.metric("ROC AUC", f"{m.get('auc_score', 0):.3f}")
+            try:
+                m = json.load(f)
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Accuracy", f"{m.get('accuracy', 0):.1%}")
+                c2.metric("Precision", f"{m.get('precision', 0):.1%}")
+                c3.metric("ROC AUC", f"{m.get('auc_score', 0):.3f}")
+            except: st.error("Metrics file corrupted.")
+    else:
+        st.warning("Training metrics not found. Please train models to see results.")
 
 elif page == "Rebalance History":
-    st.title("Rebalancing History")
+    st.title(f"📅 Rebalancing Log: {MARKET_CONFIG.get('market_name')}")
     if not df_rebalance.empty:
         st.dataframe(df_rebalance.sort_index(ascending=False), use_container_width=True)
+    else:
+        st.info("No rebalancing history recorded for this market.")
 
+# =============================================================================
+# FOOTER
+# =============================================================================
 st.markdown("---")
 st.markdown("""
 <div class="disclaimer-box">
-    <div class="disclaimer-title">AVIS DE NON-RESPONSABILITÉ</div>
-    <p>Informations à titre éducatif uniquement. Pas de conseil en investissement.</p>
+    <div class="disclaimer-title">⚠️ AVIS DE NON-RESPONSABILITÉ</div>
+    <p>Les informations présentées sont fournies à titre indicatif et éducatif. Elles ne constituent pas un conseil financier.</p>
 </div>
 """, unsafe_allow_html=True)

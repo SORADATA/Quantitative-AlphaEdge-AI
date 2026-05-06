@@ -33,5 +33,6 @@ logs/
 .DS_Store
 .vscode/
 *.swp
+.env
 
 

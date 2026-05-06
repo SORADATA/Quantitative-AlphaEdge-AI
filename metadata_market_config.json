@@ -1,0 +1,17 @@
+{
+    "market_name": "CAC 40 (France)",
+    "last_update": "2026-05-06T16:32:29.435958",
+    "current_allocation": {
+        "AIR.PA": 0.02,
+        "CA.PA": 0.25,
+        "EN.PA": 0.25,
+        "LR.PA": 0.17,
+        "PUB.PA": 0.02,
+        "STMPA.PA": 0.25,
+        "TEP.PA": 0.02,
+        "VIE.PA": 0.02
+    },
+    "metrics": {
+        "final_value": 309.6180406362211
+    }
+}

@@ -1,0 +1,26 @@
+backtest:
+  start_time: "2020-01-01"
+  end_time: null            # dynamique : today en production
+  mode: "live"              # basculer sur "backtest" pour évaluation historique
+  initial_capital: 100.0    # base indice pour comparaison normalisée
+  risk_free_rate: 0.02
+  trading_days_year: 252
+
+transaction:
+  open_cost: 0.0005
+  close_cost: 0.0015
+  min_cost: 0.0
+
+strategy:
+  target_cluster: 3
+  proba_threshold: 0.55
+  weight_bounds: [0.02, 0.25]
+  lookback_days: 252
+
+benchmark:
+  ticker: "^FCHI"           # CAC40
+
+pipeline:
+  run_daily: true
+  rebalance_frequency: "monthly"   # le backtest rebalance mensuellement
+  signal_cache: true

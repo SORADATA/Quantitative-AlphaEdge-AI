@@ -1,24 +1,33 @@
 from pathlib import Path
-
-
-# =============================================================================
-# PATHS
-# =============================================================================
+import os
+from dotenv import load_dotenv
+import yaml
 
 BASE_DIR = Path(__file__).resolve().parent
+CONFIG_PATH = BASE_DIR / "config" / "backtest_config.yaml"
+
+with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f)
+
+RISK_FREE_RATE = cfg["backtest"]["risk_free_rate"]
+OPEN_COST = cfg["transaction"]["open_cost"]
+CLOSE_COST = cfg["transaction"]["close_cost"]
+TRADING_DAYS_YEAR = cfg["backtest"]["trading_days_year"]
+
 DATA_DIR = BASE_DIR / "data"
-MODEL_DIR = BASE_DIR / 'src' / 'models'
+MODEL_DIR = BASE_DIR / "src" / "models"
 LOG_DIR = BASE_DIR / "logs"
 CONFIG_DIR = BASE_DIR / "config"
 DEFAULT_MARKET = "cac40.json"
-CONFIG_FILE = BASE_DIR / DEFAULT_MARKET
+CONFIG_FILE = CONFIG_DIR / DEFAULT_MARKET
 
-# =============================================================================
-# MARKET & RISK
-# =============================================================================
+load_dotenv(BASE_DIR / ".env")
+HF_TOKEN = os.getenv("HF_TOKEN")
+REPO_ID = "soradata/alphaedge-data"
 
-TRADING_DAYS_YEAR: int = 252
-RISK_FREE_RATE:    float = 0.03
+TARGET_CLUSTER = cfg["strategy"]["target_cluster"]
+PROBA_THRESHOLD = cfg["strategy"]["proba_threshold"]
+FEATURE_COLS = cfg["strategy"]["feature_cols"]
 
 # =============================================================================
 # ML SIGNAL
