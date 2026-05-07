@@ -3,6 +3,10 @@ data/raw/
 data/interim/
 data/processed/
 results/
+data/*.parquet
+data/metadata_*.json
+data/ticker_validation.json
+
 
 
 # Fichiers Python/Jupyter/Environnement
@@ -33,5 +37,6 @@ logs/
 .DS_Store
 .vscode/
 *.swp
+.env
 
 
