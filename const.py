@@ -1,5 +1,8 @@
 from pathlib import Path
-
+# from pathlib import Path
+from dotenv import load_dotenv
+import os
+import json
 
 # =============================================================================
 # PATHS
@@ -10,6 +13,18 @@ DATA_DIR = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / 'src' / 'models'
 LOG_DIR = BASE_DIR / "logs"
 CONFIG_FILE = BASE_DIR / "config" / "market_config.json"
+
+load_dotenv(BASE_DIR / ".env")
+
+# Charge la config JSON pour récupérer huggingface.repo_id
+with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+
+huggingface_cfg = cfg.get("huggingface", {})
+
+HF_TOKEN = os.getenv("HF_TOKEN")
+REPO_ID = huggingface_cfg.get("repo_id", "soradata/alphaedge-data")
+
 
 # =============================================================================
 # MARKET & RISK
