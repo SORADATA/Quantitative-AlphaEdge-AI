@@ -17,7 +17,6 @@ from src.pipeline.etl import get_data_pipeline, load_models
 from src.backtest.backtest import backtest_strategy_with_rebalancing
 from src.strategy.signals import AlphaSignal
 
-
 warnings.filterwarnings("ignore")
 logger = setup_logger("DailyRun")
 
@@ -81,7 +80,6 @@ logger.info(f"Pipeline running for period up to: {END_TIME}")
 # =============================================================================
 
 def upload_to_hub(df: pd.DataFrame, filename: str) -> None:
-    """Upload a dataframe to Hugging Face datasets as parquet."""
     if df is None or df.empty:
         logger.warning(f"Skip upload for {filename}: empty dataframe")
         return
@@ -114,13 +112,6 @@ def upload_to_hub(df: pd.DataFrame, filename: str) -> None:
 # =============================================================================
 
 def build_topk_allocation(today_data: pd.DataFrame) -> Dict[str, float]:
-    """
-    Build today's live allocation:
-    1. filter on cluster
-    2. filter on probability threshold
-    3. keep top-k highest proba names
-    4. equal weight
-    """
     if today_data.empty:
         return {}
 
@@ -163,14 +154,12 @@ def run_pipeline_for_config(config_file: str) -> None:
     logger.info("-" * 60)
 
     try:
-        # 1. Load models + data
         xgb_model, kmeans_model = load_models()
         df_daily, df_monthly = get_data_pipeline(config_file)
 
         if df_daily is None or df_monthly is None or df_daily.empty or df_monthly.empty:
             raise RuntimeError(f"Data pipeline failure for {market_name}")
 
-        # 2. Build signal generator
         logger.info("Generating signal cache (vectorized)...")
         signal_generator = AlphaSignal.from_xgboost_kmeans(
             df_monthly,
@@ -179,7 +168,6 @@ def run_pipeline_for_config(config_file: str) -> None:
             FEATURE_COLS,
         )
 
-        # 3. Get latest monthly snapshot
         last_date = df_monthly.index.get_level_values("date").max()
         today_data = df_monthly.xs(last_date, level="date").copy()
 
@@ -187,10 +175,8 @@ def run_pipeline_for_config(config_file: str) -> None:
         today_data["proba_upside"] = today_signals["proba_upside"]
         today_data["cluster"] = today_signals["cluster"]
 
-        # 4. Current live allocation
         final_alloc = build_topk_allocation(today_data)
 
-        # 5. Backtest TOP-K only
         logger.info("Running Top-k backtest...")
         hist_df, rebal_df = backtest_strategy_with_rebalancing(
             df_daily=df_daily,
@@ -200,16 +186,30 @@ def run_pipeline_for_config(config_file: str) -> None:
             proba_threshold=PROBA_THRESHOLD,
         )
 
-        # 6. Export dataframe for dashboard
+        logger.info("=== DEBUG HIST_DF TAIL ===")
+        logger.info(f"\n{hist_df.tail(20)}")
+
+        logger.info("=== WORST STRATEGY RETURNS ===")
+        logger.info(f"\n{hist_df['Strategy'].pct_change().sort_values().head(20)}")
+
+        logger.info("=== FOCUS 2024-09 TO 2025-03 ===")
+        logger.info(f"\n{hist_df.loc['2024-09-01':'2025-03-31']}")
+
+        logger.info("=== AROUND BREAK DATE ===")
+        crash_date = hist_df["Strategy"].pct_change().idxmin()
+        logger.info(f"Crash date detected: {crash_date}")
+
+        start_debug = crash_date - pd.Timedelta(days=10)
+        end_debug = crash_date + pd.Timedelta(days=10)
+        logger.info(f"\n{hist_df.loc[start_debug:end_debug]}")
+
         export_df = build_export_df(today_data, final_alloc)
 
-        # 7. Upload one official output set
         suffix = config_file.replace(".json", "")
         upload_to_hub(export_df, f"latest_signals_{suffix}")
-        upload_to_hub(hist_df, f"portfolio_history_{suffix}")
-        upload_to_hub(rebal_df, f"rebalance_history_{suffix}")
+        upload_to_hub(hist_df, f"portfolio_history_backtest_{suffix}")
+        upload_to_hub(rebal_df, f"rebalance_history_backtest_{suffix}")
 
-        # 8. Local metadata
         metadata = {
             "market_name": market_name,
             "strategy_method": "topk",
