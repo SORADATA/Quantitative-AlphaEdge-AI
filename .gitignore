@@ -6,6 +6,7 @@ results/
 data/*.parquet
 data/metadata_*.json
 data/ticker_validation.json
+*.csv
 
 
 
