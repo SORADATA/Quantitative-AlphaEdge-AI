@@ -1,3 +1,19 @@
+## [1.7.0](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/compare/v1.6.0...v1.7.0) (2026-05-07)
+
+### Features
+
+* Add dev for branch manage HF ([11be3e0](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/11be3e0549c6b293af9e1cf82b7014f59b0a5aa8))
+* Add HF dependancies ([54111e1](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/54111e1e824fae7db5f8f1a7be538e3c7356126e))
+* Add Hugging face database ([8f260f8](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/8f260f88af3723d4dc4b766c729673cd9b74ec0e))
+* Add script for Huggingface dataset ([30880c6](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/30880c64f5b9e487de5548523ea2877b670211cf))
+
+### Documentation
+
+* Add contribution file ([d7d0090](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/d7d0090d9c5eb7e086d503f5c339b76f2cdd6a0e))
+* Add pipeline directory and const.py file to README ([469a333](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/469a3330feafd7ce7c066178ee23daf276355c25))
+* Add release and bot actions badges ([83cbba8](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/83cbba8d5a81f1f8001df03bfc8e045ffa128fde))
+* Refine comments in python-app.yml ([afa3306](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/commit/afa3306a4d032ee956b45a2c2dba33c3cfaa2ea3))
+
 ## [1.6.0](https://github.com/SORADATA/CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/compare/v1.5.0...v1.6.0) (2026-04-30)
 
 ### Features
