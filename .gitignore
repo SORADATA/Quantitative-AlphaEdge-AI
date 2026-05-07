@@ -1,9 +1,11 @@
-# Fichiers de données générés et gros fichiers
+# Generated outputs
 data/raw/
 data/interim/
 data/processed/
 results/
-
+data/*.parquet
+data/metadata_*.json
+data/ticker_validation.json
 
 # Fichiers Python/Jupyter/Environnement
 __pycache__/
@@ -38,4 +40,5 @@ logs/
 # Market configs not used yet
 #config/nasdaq.json
 #config/sp500.json
+
 
