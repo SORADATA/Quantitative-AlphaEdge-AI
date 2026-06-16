@@ -1,0 +1,18 @@
+{
+  "market_name": "BRVM (UEMOA)",
+  "benchmark_ticker": "BRVM_COMPOSITE",
+  "currency": "XOF",
+  "assets": [
+    "ABJC", "BICC", "BNBC", "BOAC", "CABC", "CFAC", "CIEC", 
+    "ECOC", "FTSC", "NEIC", "NSBC", "NTLC", "ORAC", "PALC", 
+    "PRSC", "SAFC", "SCRC", "SDCC", "SDSC", "SEMC", "SGBC", 
+    "SHEC", "SIBC", "SICC", "SIVC", "SLBC", "SMBC", "SOGC", 
+    "SPHC", "STAC", "STBC", "TTLC", "UNLC", "UNXC",
+    "BOAS", "SNTS", "TTLS",
+    "BOABF", "CBIBF", "ONTBF",
+    "BOAM",
+    "ETIT", "ORGT",
+    "BICB", "LNBB", "BOAB",
+    "BOAN"
+  ]
+}
