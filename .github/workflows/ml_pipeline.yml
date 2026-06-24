@@ -1,0 +1,35 @@
+name: AlphaEdge Auto-Retrain Pipeline
+
+on:
+  # Automatisation : All Friday at 20h00 UTC
+  schedule:
+    - cron: '0 20 * * 5'
+  
+  # Manual
+  workflow_dispatch:
+
+jobs:
+  train-and-log:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Take repo code
+        uses: actions/checkout@v3
+
+      - name: 🐍 Configure Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: 📦 Install dependancies
+        run: |
+          pip install -r requirements.txt
+      
+
+      - name:  Re-train Model & send on Hugging face Space
+        env:
+          MLFLOW_TRACKING_USERNAME: "SORADATA"
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.HF_TOKEN }}
+        run: |
+          python src/train.py
