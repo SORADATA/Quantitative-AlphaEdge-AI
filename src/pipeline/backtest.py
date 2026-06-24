@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from pypfopt import EfficientFrontier, risk_models, expected_returns
 
+# Import des constantes globales nécessaires (non dépendantes de la config)
 from const import (
     TARGET_CLUSTER,
     PROBA_THRESHOLD,
@@ -11,11 +12,9 @@ from const import (
     RISK_FREE_RATE
 )
 from src.utils.logger import setup_logger
-from src.utils.config_loader import BENCHMARK_TICKER
 from src.utils.market_utils import get_benchmark_returns
 
 logger = setup_logger("backtest")
-
 
 def get_optimal_weights(prices_df: pd.DataFrame) -> Tuple[Dict[str, float], bool]:
     try:
@@ -29,7 +28,6 @@ def get_optimal_weights(prices_df: pd.DataFrame) -> Tuple[Dict[str, float], bool
     except Exception as e:
         logger.warning(f"Optimization failed: {e}")
         return {}, False
-
 
 def _generate_monthly_signals(
     month_data: pd.DataFrame,
@@ -45,7 +43,6 @@ def _generate_monthly_signals(
 
     month_data["proba_upside"] = xgb_model.predict_proba(month_data[FEATURE_COLS].fillna(0))[:, 1]
     return month_data
-
 
 def _simulate_daily_returns(
     allocation: Dict[str, float],
@@ -74,15 +71,15 @@ def _simulate_daily_returns(
 
     return records, portfolio_value, benchmark_value
 
-
 def backtest_strategy_with_rebalancing(
     df_daily: pd.DataFrame,
     df_monthly: pd.DataFrame,
     xgb_model: Any,
     kmeans_model: Any,
     get_optimal_weights_fn: Any,
+    benchmark_ticker: str = "^FCHI" # Ajouté ici pour l'injection dynamique
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    logger.info("Starting backtest...")
+    logger.info(f"Starting backtest with benchmark: {benchmark_ticker}...")
 
     daily_prices = df_daily["adj close"].unstack().ffill()
     daily_returns = daily_prices.pct_change().fillna(0)
@@ -91,7 +88,7 @@ def backtest_strategy_with_rebalancing(
     date_max = df_daily.index.get_level_values("date").max()
 
     benchmark_returns = get_benchmark_returns(
-        BENCHMARK_TICKER, date_min, date_max, daily_prices.index
+        benchmark_ticker, date_min, date_max, daily_prices.index
     )
 
     portfolio_value, benchmark_value = 100.0, 100.0

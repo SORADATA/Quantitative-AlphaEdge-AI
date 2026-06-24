@@ -14,7 +14,7 @@ from src.transform.features import (
     get_fama_french_betas
 )
 from src.transform.ticker_manager import handle_ticker_changes, validate_and_clean_tickers
-from src.utils.config_loader import TICKERS
+# from src.utils.config_loader import TICKERS
 from src.utils.logger import setup_logger
 
 logger = setup_logger("etl")
@@ -68,12 +68,12 @@ def _resample_to_monthly(df: pd.DataFrame) -> pd.DataFrame:
     return monthly
 
 
-def get_data_pipeline() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+def get_data_pipeline(tickers: list) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """Full ETL pipeline orchestrator."""
     ticker_changes, delisted = handle_ticker_changes()
     active_tickers = [
         ticker_changes.get(t, t)
-        for t in TICKERS
+        for t in tickers
         if t not in delisted
     ]
 

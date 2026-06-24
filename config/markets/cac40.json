@@ -1,6 +1,6 @@
-
-MARKETS_UNIVERSE = {
-    "CAC40": [
+{
+    "market_name": "CAC40",
+    "tickers": [
         "AI.PA", "AIR.PA", "ALO.PA", "MT.AS", "ATO.PA", "CS.PA", "BNP.PA",
         "EN.PA", "CAP.PA", "CA.PA", "DSY.PA", "EL.PA", "ENGI.PA", "ERF.PA",
         "RMS.PA", "KER.PA", "OR.PA", "LR.PA", "MC.PA", "ML.PA", "ORA.PA",
@@ -8,8 +8,5 @@ MARKETS_UNIVERSE = {
         "GLE.PA", "STLAP.PA", "STMPA.PA", "TEP.PA", "HO.PA", "TTE.PA",
         "URW.PA", "VIE.PA", "DG.PA", "VIV.PA", "WLN.PA", "FR.PA"
     ],
-    #    "BRVM": [ ]
+    "ff_region": "Europe_5_Factors"
 }
-
-# Global params
-HISTORY_YEARS = 10
