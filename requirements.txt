@@ -1,40 +1,49 @@
 # Data manipulation
-pandas>=2.2.0,<3.0.0      
-numpy>=1.26.0,<2.0.0       
+pandas>=2.2.0,<3.0.0
+numpy>=1.26.0
+
 
 # Data collection
 yfinance>=0.2.32
-pandas-datareader==0.10.0  
+pandas-datareader>=0.10.0
+
 
 # Machine Learning & Stats
-scikit-learn>=1.3.2,<1.6.0 
+scikit-learn>=1.5.0
 xgboost>=2.0.2
 statsmodels>=0.14.0
 
+
 # Portfolio optimization
 PyPortfolioOpt>=1.5.5
+
 
 # Visualization
 matplotlib>=3.8.2
 seaborn>=0.13.0
 plotly>=5.18.0
 
+
 # Technical indicators
 ta>=0.11.0
+
 
 # Utilities
 jupyter>=1.0.0
 notebook>=7.0.6
 tqdm>=4.66.1
 
+
 # Web App
 streamlit>=1.30.0
 streamlit-autorefresh
 
-# Hugging face 
+
+# Hugging Face
 huggingface_hub>=0.20.0
 datasets>=2.16.0
 pyarrow>=14.0.0
 
-# environnement variables
+
+# Environment variables
 python-dotenv>=1.0.0
