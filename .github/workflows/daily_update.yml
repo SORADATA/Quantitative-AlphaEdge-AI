@@ -2,64 +2,47 @@ name: Daily Portfolio Analytics
 
 on:
   schedule:
-    # Lundi-Vendredi à 21:00 UTC pour s'assurer que les données API sont à jour
-    - cron: '0 21 * * 1-5'  
-  workflow_dispatch:  # Bouton manuel
-
-# permissions:
-# contents: write
-# actions: read
+    - cron: '0 21 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   portfolio-optimization:
     name: Run ML Pipeline & Sync to Hugging Face
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    
+
     steps:
-      # ══════════════════════════════════════════════════════
-      # 1. Setup Environment
-      # ══════════════════════════════════════════════════════
       - name: 📥 Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: 🐍 Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install huggingFace_hub datasets pyarrow
-      
-      
-      # ══════════════════════════════════════════════════════
-      # 2. Run Analytics Pipeline
-      # ══════════════════════════════════════════════════════
-      - name:  Execute Portfolio Optimization
+
+      - name: 🚀 Execute Daily Pipeline
         run: |
-          echo " Starting portfolio analytics pipeline..."
-          python daily_run.py
-          echo "✅ Pipeline completed successfully"
+          echo "Starting portfolio analytics pipeline..."
+          python src/pipeline/daily_run.py
+          echo " Pipeline completed successfully"
         env:
+          PYTHONPATH: .                         
           PYTHONUNBUFFERED: 1
           TZ: Europe/Paris
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      
-      
-      # ══════════════════════════════════════════════════════
-      # 3. Summary jobs
-      # ══════════════════════════════════════════════════════
-      - name:  Generate job summary
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}   
+
+      - name: 📋 Generate job summary
         if: always()
         run: |
-          echo "## AlphaEdge Analytics Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## AlphaEdge Daily Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Data Provider**: Hugging Face (soradata/alphaedge-data)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Market Timestamp**: $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
-     
+          echo "- **Run date**: $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Market**: CAC40" >> $GITHUB_STEP_SUMMARY

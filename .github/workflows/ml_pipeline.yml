@@ -1,35 +1,42 @@
 name: AlphaEdge Auto-Retrain Pipeline
 
 on:
-  # Automatisation : All Friday at 20h00 UTC
   schedule:
-    - cron: '0 20 * * 5'
-  
-  # Manual
+    - cron: '0 20 * * 5'   # Vendredi 20h UTC
   workflow_dispatch:
 
 jobs:
   train-and-log:
     runs-on: ubuntu-latest
-    
-    steps:
-      - name: Take repo code
-        uses: actions/checkout@v3
+    timeout-minutes: 45    
 
-      - name: 🐍 Configure Python 3.10
-        uses: actions/setup-python@v4
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4    
+
+      - name: 🐍 Setup Python 3.11  
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
           cache: 'pip'
 
-      - name: 📦 Install dependancies
+      - name: 📦 Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
 
-      - name:  Re-train Model & send on Hugging face Space
+      - name: 🤖 Retrain & Push to Hugging Face
+        run: python src/models/train.py
         env:
+          PYTHONPATH: .                         
+          PYTHONUNBUFFERED: 1
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}       
           MLFLOW_TRACKING_USERNAME: "SORADATA"
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.HF_TOKEN }}
+
+      - name: 📋 Generate job summary
+        if: always()
         run: |
-          python src/train.py
+          echo "## AlphaEdge Weekly Retrain" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run date**: $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY

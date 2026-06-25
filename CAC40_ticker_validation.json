@@ -1,10 +1,10 @@
 {
-  "date": "2026-06-25 15:56:21.887464",
+  "date": "2026-06-25 18:14:00.394142",
   "alerts": {
     "delisted": [],
     "stale": [],
     "missing": [],
     "warnings": []
   },
-  "valid_tickers": -1
+  "valid_tickers": 36
 }

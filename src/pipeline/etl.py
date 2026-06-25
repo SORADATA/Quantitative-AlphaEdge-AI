@@ -85,16 +85,23 @@ def load_models() -> Tuple[Optional[Any], Optional[Any]]:
 # BLOC DE TEST LOCAL
 # ==========================================
 if __name__ == "__main__":
-    # On simule une configuration basique pour tester
-    test_config = {
-        "market_name": "CAC40_Test",
-        "tickers": ["AI.PA", "AIR.PA", "OR.PA"]  # Air Liquide, Airbus, L'Oréal
-    }
-    
-    print("🛠️ Lancement du test local de l'ETL...")
-    df_daily, df_monthly = get_data_pipeline(test_config)
-    
-    if df_daily is not None:
-        print(f"✅ Test réussi ! Shape daily: {df_daily.shape}, Shape monthly: {df_monthly.shape}")
+    import sys
+    import json
+    from pathlib import Path
+
+    config_path = Path("config/markets/cac40.json")
+    if config_path.exists():
+        config = json.load(open(config_path))
     else:
-        print("❌ Le test a échoué.")
+        config = {
+            "market_name": "CAC40_Test",
+            "tickers": ["AI.PA", "AIR.PA", "OR.PA"]
+        }
+
+    print(f"Lancement ETL — {config['market_name']}...")
+    df_daily, df_monthly = get_data_pipeline(config)
+
+    if df_daily is not None:
+        print(f"✅ Succès ! Shape daily: {df_daily.shape}, Shape monthly: {df_monthly.shape}")
+    else:
+        print("❌ Échec.")

@@ -1,165 +1,239 @@
+"""
+Train Pipeline — AlphaEdge Ensemble
+=====================================
+XGBoost + LightGBM + Ridge → LogisticRegression (stacking).
+Optuna Bayesian HPO + PurgedTimeSeriesSplit + Walk-Forward Validation.
+"""
+
 import os
+import json
 import warnings
-import pickle
-import pandas as pd
 from pathlib import Path
 
-from sklearn.cluster import KMeans
-from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
-from sklearn.metrics import roc_auc_score
-import xgboost as xgb
-import mlflow
-import mlflow.xgboost
+import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
+from sklearn.dummy import DummyClassifier
+from sklearn.metrics import roc_auc_score, average_precision_score
+import mlflow
 
-# Import de tes constantes globales
-from const import DATA_DIR, MODEL_DIR, FEATURE_COLS
+from const import DATA_DIR, MODEL_DIR, CONFIG_DIR
+from src.features.alpha_features import add_all_features
+from src.models.ensemble import AlphaEdgeEnsemble, FEATURE_GROUPS
+from src.utils.logger import setup_logger
 
 load_dotenv()
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
+logger = setup_logger("train")
 
-# ── Credentials & MLflow ──────────────────────────────────────
-HF_TOKEN = os.getenv("HF_TOKEN")
-if not HF_TOKEN:
-    raise EnvironmentError("❌ HF_TOKEN non défini dans le fichier .env")
+HF_TOKEN   = os.getenv("HF_TOKEN")
+USE_MLFLOW = bool(HF_TOKEN)
 
-os.environ["MLFLOW_TRACKING_USERNAME"] = "SORADATA"
-os.environ["MLFLOW_TRACKING_PASSWORD"] = HF_TOKEN
+if USE_MLFLOW:
+    os.environ["MLFLOW_TRACKING_USERNAME"] = "SORADATA"
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = HF_TOKEN
+    mlflow.set_tracking_uri("https://soradata-alphaedge-registry.hf.space")
+    mlflow.set_experiment("AlphaEdge_Ensemble_Production")
 
-mlflow.set_tracking_uri("https://soradata-alphaedge-registry.hf.space")
-mlflow.set_experiment("AlphaEdge_XGBoost_Production")
 
-# ── Training ──────────────────────────────────────────────────
-def train_pipeline(market_name: str = "CAC40"):
-    # 1. Chargement des données traitées par l'ETL
+# ══════════════════════════════════════════════════════════════════
+# WALK-FORWARD VALIDATION
+# ══════════════════════════════════════════════════════════════════
+
+def walk_forward_eval(
+    df: pd.DataFrame,
+    n_windows: int = 4,
+    test_months: int = 3,
+    n_optuna_trials: int = 20,
+) -> pd.DataFrame:
+    """
+    Évalue la robustesse sur N fenêtres glissantes out-of-sample.
+    Chaque fenêtre entraîne un modèle fresh sur train[: window_start]
+    et évalue sur les test_months suivants.
+    """
+    dates   = df.index.get_level_values("date").unique().sort_values()
+    results = []
+
+    for i in range(n_windows):
+        test_end   = dates[-(i * test_months + 1)]
+        test_start = dates[-(i * test_months + test_months)]
+        train_end  = test_start - pd.DateOffset(months=1)
+
+        df_tr = df[df.index.get_level_values("date") <= train_end]
+        df_te = df[
+            (df.index.get_level_values("date") >= test_start) &
+            (df.index.get_level_values("date") <= test_end)
+        ]
+
+        if len(df_tr) < 50 or len(df_te) < 5:
+            continue
+        if len(df_te["target"].unique()) < 2:
+            continue
+
+        model = AlphaEdgeEnsemble(n_optuna_trials=n_optuna_trials)
+        model.fit(df_tr, df_tr["target"])
+        proba = model.predict_proba(df_te)[:, 1]
+
+        results.append({
+            "window":     i + 1,
+            "test_start": str(test_start.date()),
+            "test_end":   str(test_end.date()),
+            "auc":        round(roc_auc_score(df_te["target"], proba), 4),
+            "apr":        round(average_precision_score(df_te["target"], proba), 4),
+            "n_test":     len(df_te),
+        })
+        logger.info(
+            f"   Window {i+1} | AUC: {results[-1]['auc']:.4f} "
+            f"| APR: {results[-1]['apr']:.4f} | n={results[-1]['n_test']}"
+        )
+
+    return pd.DataFrame(results)
+
+
+# ══════════════════════════════════════════════════════════════════
+# PIPELINE PRINCIPAL
+# ══════════════════════════════════════════════════════════════════
+
+def train_pipeline(market_name: str = "CAC40") -> tuple[AlphaEdgeEnsemble, dict]:
+    logger.info(f"\n{'='*60}")
+    logger.info(f"  AlphaEdge Training — {market_name}")
+    logger.info(f"{'='*60}")
+
+    # ── 1. Chargement ─────────────────────────────────────────
     data_path = DATA_DIR / "processed" / market_name / "monthly_features.parquet"
-    
     if not data_path.exists():
-        raise FileNotFoundError(f"❌ Données introuvables : {data_path}. Lance d'abord l'ETL.")
-        
-    print(f"📂 Chargement des données : {data_path}")
+        raise FileNotFoundError(
+            f"Données introuvables : {data_path}\n"
+            f"Lance d'abord : python src/pipeline/etl.py"
+        )
+
+    logger.info(f"Chargement : {data_path}")
     df = pd.read_parquet(data_path)
+    logger.info(f"Shape brute : {df.shape} | Tickers : {df.index.get_level_values('ticker').nunique()}")
 
-    # 2. Création de la Target (Prédiction : Le rendement du mois SUIVANT est-il positif ?)
-    # Sur des données mensuelles, pct_change(1).shift(-1) donne le rendement de T+1
-    df['target'] = (
-        df.groupby(level='ticker')['adj close']
-        .pct_change(1)
-        .shift(-1)
-        .gt(0).astype(int)
+    # ── 2. Alpha features ─────────────────────────────────────
+    df = add_all_features(df)
+
+    # ── 3. Target (rendement T+1 positif ?) ───────────────────
+    df["target"] = (
+        df.groupby(level="ticker")["adj close"]
+        .pct_change(1).shift(-1).gt(0).astype(int)
     )
+    df = df.dropna(subset=["target"])
 
-    # Sécurité : on retire la dernière ligne de chaque ticker car on ne connaît pas son futur (target = NaN)
-    df = df.dropna(subset=['target', 'rsi']) 
-
-    # 3. Split temporel (pas de fuite de données)
-    dates = df.index.get_level_values('date')
+    # ── 4. Split temporel ─────────────────────────────────────
+    dates      = df.index.get_level_values("date")
     split_date = dates.max() - pd.DateOffset(months=6)
 
-    train_mask = dates <= split_date
-    df_train = df[train_mask].copy()
-    df_test = df[~train_mask].copy()
+    df_train = df[dates <= split_date].copy()
+    df_test  = df[dates > split_date].copy()
 
-    print(f"📊 Période train : {dates[train_mask].min().date()} → {dates[train_mask].max().date()}")
-    print(f"📊 Période test  : {dates[~train_mask].min().date()} → {dates[~train_mask].max().date()}")
-
-    # 4. Entraînement et sauvegarde du modèle KMeans
-    print("🧩 Entraînement du modèle KMeans (RSI Clustering)...")
-    import numpy as np
-    kmeans = KMeans(
-        n_clusters=4, 
-        init=np.array([[30], [45], [55], [70]]), 
-        n_init=1, 
-        random_state=42
+    logger.info(
+        f"Train : {dates[dates <= split_date].min().date()} → {split_date.date()} "
+        f"({len(df_train)} obs)"
     )
-    
-    # On fit uniquement sur le Train Set pour éviter le data leakage
-    df_train['cluster'] = kmeans.fit_predict(df_train[['rsi']].fillna(50))
-    df_test['cluster'] = kmeans.predict(df_test[['rsi']].fillna(50))
+    logger.info(
+        f"Test  : {dates[dates > split_date].min().date()} → {dates.max().date()} "
+        f"({len(df_test)} obs)"
+    )
 
+    if len(df_train) < 100:
+        raise ValueError(f"Trop peu de données d'entraînement : {len(df_train)}")
+
+    # ── 5. Baseline ───────────────────────────────────────────
+    all_feats = [f for g in FEATURE_GROUPS.values() for f in g]
+    available = [f for f in all_feats if f in df_train.columns]
+
+    dummy        = DummyClassifier(strategy="most_frequent").fit(df_train[available], df_train["target"])
+    baseline_auc = roc_auc_score(
+        df_test["target"],
+        dummy.predict_proba(df_test[available])[:, 1],
+    )
+    logger.info(f"Baseline AUC : {baseline_auc:.4f}")
+
+    # ── 6. Entraînement ensemble ───────────────────────────────
+    model = AlphaEdgeEnsemble(n_optuna_trials=50)
+    model.fit(df_train, df_train["target"])
+
+    # ── 7. Métriques test ─────────────────────────────────────
+    proba     = model.predict_proba(df_test)[:, 1]
+    final_auc = roc_auc_score(df_test["target"], proba)
+    final_apr = average_precision_score(df_test["target"], proba)
+    lift      = final_auc - baseline_auc
+
+    logger.info(f"AUC Test : {final_auc:.4f} | APR : {final_apr:.4f} | Lift : +{lift:.4f}")
+
+    # ── 8. Walk-forward validation ────────────────────────────
+    logger.info("Walk-forward validation (4 fenêtres)...")
+    wf_results = walk_forward_eval(df, n_windows=4, test_months=3, n_optuna_trials=20)
+
+    if not wf_results.empty:
+        logger.info(f"\n{wf_results.to_string(index=False)}")
+        logger.info(
+            f"WF AUC : {wf_results['auc'].mean():.4f} ± {wf_results['auc'].std():.4f}"
+        )
+
+    # ── 9. Sauvegarde locale ──────────────────────────────────
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    with open(MODEL_DIR / 'kmeans_model.pkl', 'wb') as f:
-        pickle.dump(kmeans, f)
-    print("✅ Modèle KMeans sauvegardé.")
+    model.save(MODEL_DIR / "ensemble_model.pkl")
 
-    # 5. Préparation X et y pour XGBoost
-    # On s'assure que toutes les features requises par `const.FEATURE_COLS` sont présentes
-    missing_cols = [c for c in FEATURE_COLS if c not in df_train.columns]
-    if missing_cols:
-        raise ValueError(f"❌ Features manquantes dans le dataset : {missing_cols}")
+    model_card = {
+        "market":        market_name,
+        "trained_at":    pd.Timestamp.now().isoformat(),
+        "architecture":  "XGBoost + LightGBM + Ridge → LogisticRegression (stacking)",
+        "auc_test":      round(final_auc, 4),
+        "apr_test":      round(final_apr, 4),
+        "baseline_auc":  round(baseline_auc, 4),
+        "lift":          round(lift, 4),
+        "model_weights": model.get_model_weights(),
+        "walk_forward":  wf_results.to_dict(orient="records") if not wf_results.empty else [],
+        "n_features":    len(model.features_),
+        "train_size":    len(df_train),
+        "test_size":     len(df_test),
+    }
+    with open(MODEL_DIR / "model_card.json", "w") as f:
+        json.dump(model_card, f, indent=2)
 
-    df_train = df_train.dropna(subset=FEATURE_COLS)
-    df_test = df_test.dropna(subset=FEATURE_COLS)
+    logger.info(f"Modèles sauvegardés dans : {MODEL_DIR}")
 
-    X_train, y_train = df_train[FEATURE_COLS], df_train['target']
-    X_test,  y_test  = df_test[FEATURE_COLS],  df_test['target']
+    # ── 10. MLflow ────────────────────────────────────────────
+    if USE_MLFLOW:
+        with mlflow.start_run(run_name=f"Ensemble_{market_name}"):
+            mlflow.log_params({
+                "architecture": "XGB+LGB+Ridge→LR",
+                "market":       market_name,
+                "n_features":   len(model.features_),
+                "train_size":   len(df_train),
+                "test_size":    len(df_test),
+            })
+            mlflow.log_metrics({
+                "AUC_Test":    final_auc,
+                "APR_Test":    final_apr,
+                "Baseline_AUC": baseline_auc,
+                "Lift":        lift,
+                "WF_AUC_mean": wf_results["auc"].mean() if not wf_results.empty else 0.0,
+                "WF_AUC_std":  wf_results["auc"].std()  if not wf_results.empty else 0.0,
+            })
+            mlflow.log_dict(model_card, "model_card.json")
+            mlflow.sklearn.log_model(model, name="ensemble_model")
+            mlflow.register_model(
+                model_uri=f"runs:/{mlflow.active_run().info.run_id}/ensemble_model",
+                name=f"AlphaEdge_Ensemble_{market_name}",
+            )
+        logger.info("Métriques loggées sur MLflow.")
 
-    # 6. MLflow run & XGBoost Training
-    with mlflow.start_run(run_name=f"Training_{market_name}") as run:
-        print(f"🤖 Entraînement XGBoost pour {market_name}...")
+    return model, model_card
 
-        param_grid = {
-            'max_depth':     [3, 4, 5],
-            'learning_rate': [0.01, 0.05, 0.1],
-            'n_estimators':  [100, 200, 300],
-            'subsample':     [0.8, 1.0],
-        }
 
-        xgb_base = xgb.XGBClassifier(
-            eval_metric='auc',
-            random_state=42,
-            n_jobs=-1
-        )
-        tscv = TimeSeriesSplit(n_splits=5)
-
-        grid_search = GridSearchCV(
-            xgb_base, param_grid,
-            scoring='roc_auc',
-            cv=tscv,
-            n_jobs=-1,
-            verbose=1
-        )
-        
-        grid_search.fit(X_train, y_train)
-        best_model = grid_search.best_estimator_
-
-        # 7. Sauvegarde locale du XGBoost (Pour daily_run.py)
-        with open(MODEL_DIR / 'xgboost_model.pkl', 'wb') as f:
-            pickle.dump(best_model, f)
-        print("✅ Modèle XGBoost sauvegardé en local.")
-
-        # 8. Métriques et Log MLflow
-        y_pred_proba = best_model.predict_proba(X_test)[:, 1]
-        final_auc    = roc_auc_score(y_test, y_pred_proba)
-        cv_auc       = grid_search.best_score_
-
-        print(f"📈 AUC CV (train) : {cv_auc:.4f}")
-        print(f"📈 AUC Test       : {final_auc:.4f}")
-
-        mlflow.log_params(grid_search.best_params_)
-        mlflow.log_param("market", market_name)
-        mlflow.log_param("train_size", len(X_train))
-        mlflow.log_param("test_size",  len(X_test))
-        mlflow.log_metric("AUC_CV",   cv_auc)
-        mlflow.log_metric("AUC_Test", final_auc)
-
-        mlflow.xgboost.log_model(xgb_model=best_model, name="model")
-        mlflow.register_model(
-            model_uri=f"runs:/{run.info.run_id}/model",
-            name=f"AlphaEdge_XGBoost_{market_name}"
-        )
-
-        print(f"✅ Modèle enregistré sur Hugging Face (MLflow) !")
+# ══════════════════════════════════════════════════════════════════
+# ENTRYPOINT
+# ══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import json
-    
-    # On lit la config pour savoir quel marché entraîner (ex: CAC40)
-    config_path = Path("config/markets/cac40.json") 
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            market_config = json.load(f)
-        train_pipeline(market_config['market_name'])
-    else:
-        # Fallback de sécurité
-        train_pipeline("CAC40")
+    config_path = CONFIG_DIR / "markets" / "cac40.json"
+    market = (
+        json.load(open(config_path))["market_name"]
+        if config_path.exists()
+        else "CAC40"
+    )
+    train_pipeline(market)
