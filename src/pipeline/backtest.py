@@ -16,6 +16,7 @@ from src.utils.market_utils import get_benchmark_returns
 
 logger = setup_logger("backtest")
 
+
 def get_optimal_weights(prices_df: pd.DataFrame) -> Tuple[Dict[str, float], bool]:
     try:
         mu = expected_returns.mean_historical_return(prices_df, frequency=TRADING_DAYS_YEAR)
@@ -28,6 +29,7 @@ def get_optimal_weights(prices_df: pd.DataFrame) -> Tuple[Dict[str, float], bool
     except Exception as e:
         logger.warning(f"Optimization failed: {e}")
         return {}, False
+
 
 def _generate_monthly_signals(
     month_data: pd.DataFrame,
@@ -43,6 +45,7 @@ def _generate_monthly_signals(
 
     month_data["proba_upside"] = xgb_model.predict_proba(month_data[FEATURE_COLS].fillna(0))[:, 1]
     return month_data
+
 
 def _simulate_daily_returns(
     allocation: Dict[str, float],
@@ -70,6 +73,7 @@ def _simulate_daily_returns(
         records.append({"Date": date, "Strategy": portfolio_value, "Benchmark": benchmark_value})
 
     return records, portfolio_value, benchmark_value
+
 
 def backtest_strategy_with_rebalancing(
     df_daily: pd.DataFrame,

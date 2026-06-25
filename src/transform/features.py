@@ -91,7 +91,7 @@ def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
             .drop("RF", axis=1)
         )
         factor_data.index = factor_data.index.to_timestamp()
-        factor_data = factor_data.resample("BM").last().div(100)
+        factor_data = factor_data.resample("BME").last().div(100)
         factor_data.index.name = "date"
 
         if "return_1m" not in data.columns:
