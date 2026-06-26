@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from pypfopt import EfficientFrontier, risk_models, expected_returns, objective_functions
 
-# On a retiré FEATURE_COLS d'ici !
+
 from const import (
     TRADING_DAYS_YEAR,
     RISK_FREE_RATE,

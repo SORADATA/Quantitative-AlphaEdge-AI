@@ -3,7 +3,7 @@ import json
 import warnings
 from pathlib import Path
 
-import numpy as np
+
 import pandas as pd
 from dotenv import load_dotenv
 from sklearn.dummy import DummyClassifier
@@ -117,6 +117,8 @@ def train_pipeline(market_name: str = "CAC40") -> tuple[AlphaEdgeEnsemble, dict]
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     model.save(MODEL_DIR / "ensemble_model.pkl")
+    model.save(MODEL_DIR / "candidate_model.pkl")
+    logger.info("Modèle candidat sauvegardé : candidate_model.pkl")
 
     model_card = {
         "market":        market_name,

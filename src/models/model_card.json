@@ -1,30 +1,30 @@
 {
   "market": "CAC40",
-  "trained_at": "2026-06-26T12:43:21.646242",
+  "trained_at": "2026-06-26T14:02:09.624730",
   "architecture": "XGBoost + LightGBM + Ridge \u2192 LogisticRegression",
   "metrics_ml": {
-    "auc_test": 0.5775,
-    "apr_test": 0.6347,
+    "auc_test": 0.5774,
+    "apr_test": 0.635,
     "baseline_auc": 0.5,
-    "lift": 0.0775
+    "lift": 0.0774
   },
   "metrics_fin": {
-    "sharpe": 2.3457,
+    "sharpe": 2.3166,
     "max_drawdown": -0.0162,
-    "total_return": 0.1319
+    "total_return": 0.131
   },
   "model_weights": {
     "xgb": 0.0405,
     "lgb": 0.0146,
-    "ridge": 0.945
+    "ridge": 0.9449
   },
   "walk_forward": [
     {
       "window": 1,
       "test_start": "2026-04-30",
       "test_end": "2026-06-30",
-      "auc": 0.4814,
-      "apr": 0.6552,
+      "auc": 0.4845,
+      "apr": 0.6571,
       "n_test": 119
     },
     {

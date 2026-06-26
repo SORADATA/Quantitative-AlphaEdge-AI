@@ -4,7 +4,6 @@ PurgedTimeSeriesSplit — López de Prado (2018), Advances in Financial ML.
 """
 
 import numpy as np
-import pandas as pd
 from sklearn.model_selection import BaseCrossValidator
 
 

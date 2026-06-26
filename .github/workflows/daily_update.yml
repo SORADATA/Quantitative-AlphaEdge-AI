@@ -2,8 +2,8 @@ name: Daily Portfolio Analytics
 
 on:
   schedule:
-    - cron: '0 21 * * 1-5'
-  workflow_dispatch:
+    - cron: '0 21 * * 1-5'  # 21h00, du lundi au vendredi
+  workflow_dispatch:       
 
 jobs:
   portfolio-optimization:
@@ -31,18 +31,20 @@ jobs:
       - name: 🚀 Execute Daily Pipeline
         run: |
           echo "Starting portfolio analytics pipeline..."
+          export PYTHONPATH=$PYTHONPATH:.
           python src/pipeline/daily_run.py
-          echo " Pipeline completed successfully"
+          echo "Pipeline completed successfully"
         env:
-          PYTHONPATH: .                         
           PYTHONUNBUFFERED: 1
           TZ: Europe/Paris
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}   
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} 
 
       - name: 📋 Generate job summary
         if: always()
         run: |
           echo "## AlphaEdge Daily Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Run date**: $(date +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "- **Market**: CAC40" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run date**: $(date +'%Y-%m-%d %H:%M %Z')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Market**: CAC40 & US_TECH" >> $GITHUB_STEP_SUMMARY
+          # Ajouter un lien vers le rapport si tu génères un artifact
+          echo "Check the logs above for detailed performance metrics." >> $GITHUB_STEP_SUMMARY
