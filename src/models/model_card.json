@@ -1,58 +1,58 @@
 {
   "market": "CAC40",
-  "trained_at": "2026-06-26T09:42:29.963689",
+  "trained_at": "2026-06-26T12:43:21.646242",
   "architecture": "XGBoost + LightGBM + Ridge \u2192 LogisticRegression",
   "metrics_ml": {
-    "auc_test": 0.5829,
-    "apr_test": 0.6426,
+    "auc_test": 0.5775,
+    "apr_test": 0.6347,
     "baseline_auc": 0.5,
-    "lift": 0.0829
+    "lift": 0.0775
   },
   "metrics_fin": {
-    "sharpe": 2.8085,
-    "max_drawdown": -0.0147,
-    "total_return": 0.1374
+    "sharpe": 2.3457,
+    "max_drawdown": -0.0162,
+    "total_return": 0.1319
   },
   "model_weights": {
-    "xgb": 0.0247,
-    "lgb": 0.0049,
-    "ridge": 0.9704
+    "xgb": 0.0405,
+    "lgb": 0.0146,
+    "ridge": 0.945
   },
   "walk_forward": [
     {
       "window": 1,
       "test_start": "2026-04-30",
       "test_end": "2026-06-30",
-      "auc": 0.4821,
-      "apr": 0.6553,
+      "auc": 0.4814,
+      "apr": 0.6552,
       "n_test": 119
     },
     {
       "window": 2,
       "test_start": "2026-01-30",
       "test_end": "2026-03-31",
-      "auc": 0.6618,
-      "apr": 0.5938,
+      "auc": 0.6551,
+      "apr": 0.5786,
       "n_test": 120
     },
     {
       "window": 3,
       "test_start": "2025-10-31",
       "test_end": "2025-12-31",
-      "auc": 0.4875,
-      "apr": 0.6104,
+      "auc": 0.4832,
+      "apr": 0.6014,
       "n_test": 120
     },
     {
       "window": 4,
       "test_start": "2025-07-31",
       "test_end": "2025-09-30",
-      "auc": 0.5143,
-      "apr": 0.5519,
+      "auc": 0.5135,
+      "apr": 0.5484,
       "n_test": 120
     }
   ],
   "n_features": 50,
-  "train_size": 4439,
+  "train_size": 4440,
   "test_size": 279
 }

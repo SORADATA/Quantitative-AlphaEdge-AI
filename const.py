@@ -1,8 +1,6 @@
-
 from pathlib import Path
 from dotenv import load_dotenv
 import os
-
 
 # =============================================================================
 # PATHS
@@ -16,41 +14,22 @@ CONFIG_DIR = BASE_DIR / "configs"
 load_dotenv(BASE_DIR / ".env")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-
 # =============================================================================
 # MARKET & RISK
 # =============================================================================
 TRADING_DAYS_YEAR: int = 252
 RISK_FREE_RATE:    float = 0.03
 
-
 # =============================================================================
 # ML SIGNAL — paramètres de sélection
 # =============================================================================
-# Utilisés dans backtest.py (_select_tickers) et dans les configs par marché.
-# TARGET_CLUSTER et PROBA_THRESHOLD sont gardés pour rétrocompatibilité
-# mais PROBA_MIN est la référence du nouveau backtest.
 TARGET_CLUSTER:   int = 3
-PROBA_THRESHOLD:  float = 0.60
-PROBA_MIN:        float = 0.55
-MAX_STOCKS:       int = 15     # nombre max de titres en portefeuille
-
-
+PROBA_THRESHOLD:  float = 0.51
+PROBA_MIN:        float = 0.51
+MAX_STOCKS:       int = 15 
 # =============================================================================
 # FEATURE COLUMNS
 # =============================================================================
-# ⚠️  Règle critique : toutes les features calculées sur T doivent être laggées
-#     d'une période (→ _lag1) pour éviter le data leakage.
-#
-#     Exceptions (calculées sur T-1 par construction) :
-#       - return_Nm  : pct_change(N) sur adj close → déjà du passé
-#       - Fama-French _lag1 : laggés dans processor.py (VARS_TO_LAG)
-#       - alpha features     : calculées sur rendements passés
-#
-#     Indicateurs TA (rsi, macd, bb_*, atr, cluster) :
-#       → Calculés sur le prix de clôture du mois T
-#       → DOIVENT être laggés : utiliser les versions _lag1
-
 FEATURE_COLS: list[str] = [
     # ── Indicateurs techniques (laggés — anti-leakage)
     "rsi_lag1",
@@ -119,7 +98,6 @@ FEATURE_COLS: list[str] = [
     "is_q_end",
 ]
 
-
 # =============================================================================
 # TECHNICAL INDICATORS — fenêtres
 # =============================================================================
@@ -131,7 +109,6 @@ MACD_SLOW:  int = 26
 MACD_FAST:  int = 12
 MACD_SIGN:  int = 9
 
-
 # =============================================================================
 # FEATURE ENGINEERING — historique minimum
 # =============================================================================
@@ -140,7 +117,6 @@ MIN_HISTORY_FF: int = 24     # mois minimum pour le rolling OLS Fama-French
 WINSOR_CUTOFF:  float = 0.005  # cutoff winsorisation (0.5% / 99.5%)
 
 MOMENTUM_LAGS: list[int] = [1, 2, 3, 6, 9, 12]   # lags pour calculate_returns()
-
 
 # =============================================================================
 # LAGS — anti-leakage
@@ -155,11 +131,9 @@ VARS_TO_LAG: list[str] = [
 
 FAMA_FRENCH_FACTORS: list[str] = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
 
-
 # =============================================================================
 # RESAMPLING — agrégation daily → monthly
 # =============================================================================
-# Colonnes agrégées par MOYENNE mensuelle (flux)
 RESAMPLE_MEAN_COLS: list[str] = ["euro_volume"]
 
 RESAMPLE_LAST_EXCLUDE: list[str] = [
@@ -174,13 +148,13 @@ RESAMPLE_LAST_EXCLUDE: list[str] = [
 SHARPE_THRESHOLD = 0.5
 MAX_DD_THRESHOLD = -0.15
 
-
+# =============================================================================
+# OPTIMISATION & PORTFOLIO
+# =============================================================================
 TRANSACTION_COST = 0.0010
 MIN_STOCKS_OPTIM = 3
 MAX_STOCKS_SELECT = 15
-PROBA_MIN = 0.55
-WEIGHT_BOUNDS = (0.02, 0.20)
-
+WEIGHT_BOUNDS = (0.02, 0.25)
 
 FEATURE_GROUPS = {
     "momentum": [
