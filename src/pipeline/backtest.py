@@ -51,7 +51,6 @@ def get_optimal_weights(prices_df: pd.DataFrame, risk_free_rate: float = RISK_FR
             return {t: 1.0 / n for t in prices_df.columns}, "equal_weight"
 
 
-# ---- LA FONCTION CORRIGÉE EST ICI ----
 def _generate_monthly_signals(month_data: pd.DataFrame, model: Any) -> pd.DataFrame:
     """
     Génère les signaux ML pour un mois donné.
@@ -62,14 +61,12 @@ def _generate_monthly_signals(month_data: pd.DataFrame, model: Any) -> pd.DataFr
 
     try:
         month_data = month_data.copy()
-        # On passe directement les données brutes, le modèle sait quelles colonnes utiliser !
         month_data["proba_upside"] = model.predict_proba(month_data)[:, 1]
     except Exception as e:
         logger.error(f"predict_proba failed: {e}")
         return pd.DataFrame()
 
     return month_data
-# --------------------------------------
 
 
 def _select_tickers(month_data: pd.DataFrame, proba_min: float = PROBA_MIN, max_stocks: int = MAX_STOCKS_SELECT) -> List[str]:
@@ -284,45 +281,3 @@ def backtest_strategy_with_rebalancing(
     logger.info(f" Backtest complete | Final value: {portfolio_value:.2f}")
 
     return results_df, rebalance_df, metrics
-
-
-if __name__ == "__main__":
-    import json
-    import pandas as pd
-    from const import CONFIG_DIR, DATA_DIR, MODEL_DIR
-    from src.models.ensemble import AlphaEdgeEnsemble
-
-    config_path = CONFIG_DIR / "markets" / "cac40.json"
-    market = json.load(open(config_path))["market_name"] if config_path.exists() else "CAC40"
-
-    logger.info(f"🚀 Démarrage de la simulation sur le {market}...")
-
-    model_path = MODEL_DIR / "ensemble_model.pkl"
-    if not model_path.exists():
-        raise FileNotFoundError("Aucun modèle trouvé. Lance 'python -m src.models.train' en premier.")
-    model = AlphaEdgeEnsemble.load(model_path)
-
-    # Chargement du fichier qui DOIT déjà contenir les features
-    logger.info("Chargement des données mensuelles...")
-    df_monthly = pd.read_parquet(DATA_DIR / "processed" / market / "monthly_features.parquet")
-    
-    # ⚠️ Vérification critique des features
-    missing_features = [f for f in model.features_ if f not in df_monthly.columns]
-    if missing_features:
-        logger.error(f"FATAL: Il manque {len(missing_features)} features dans monthly_features.parquet.")
-        logger.error(f"Exemples de features manquantes : {missing_features[:5]}")
-        logger.error("Veuillez vérifier que l'ETL génère bien TOUTES les features utilisées lors de l'entraînement.")
-        exit(1) # On arrête l'exécution si les données ne correspondent pas
-
-    df_daily = pd.read_parquet(DATA_DIR / "processed" / market / "daily_raw.parquet")
-
-    results_df, rebalance_df, metrics = backtest_strategy_with_rebalancing(
-        df_daily=df_daily,
-        df_monthly=df_monthly, 
-        model=model,
-        benchmark_ticker="^FCHI"
-    )
-
-    results_df.to_csv(DATA_DIR / "backtest_results_daily.csv")
-    rebalance_df.to_csv(DATA_DIR / "backtest_rebalance_log.csv")
-    logger.info("✅ Fichiers d'analyse CSV sauvegardés avec succès !")
