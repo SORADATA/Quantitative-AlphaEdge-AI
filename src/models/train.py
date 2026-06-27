@@ -3,15 +3,14 @@ import json
 import warnings
 from pathlib import Path
 
-
 import pandas as pd
 from dotenv import load_dotenv
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import roc_auc_score, average_precision_score
 import mlflow
+import mlflow.sklearn
 from mlflow.tracking import MlflowClient
 
-# Nouveaux imports
 from const import DATA_DIR, MODEL_DIR, CONFIG_DIR, SHARPE_THRESHOLD, MAX_DD_THRESHOLD
 from src.utils.metrics import calculate_financial_metrics
 from src.features.alpha_features import add_all_features
@@ -32,7 +31,15 @@ if USE_MLFLOW:
     mlflow.set_experiment("AlphaEdge_Ensemble_Production")
 
 
-def walk_forward_eval(df: pd.DataFrame, n_windows: int = 4, test_months: int = 3, n_optuna_trials: int = 20) -> pd.DataFrame:
+# =============================================================================
+# WALK-FORWARD VALIDATION
+# =============================================================================
+def walk_forward_eval(
+    df: pd.DataFrame,
+    n_windows: int = 4,
+    test_months: int = 3,
+    n_optuna_trials: int = 20,
+) -> pd.DataFrame:
     dates = df.index.get_level_values("date").unique().sort_values()
     results = []
 
@@ -43,8 +50,8 @@ def walk_forward_eval(df: pd.DataFrame, n_windows: int = 4, test_months: int = 3
 
         df_tr = df[df.index.get_level_values("date") <= train_end]
         df_te = df[
-            (df.index.get_level_values("date") >= test_start) &
-            (df.index.get_level_values("date") <= test_end)
+            (df.index.get_level_values("date") >= test_start)
+            & (df.index.get_level_values("date") <= test_end)
         ]
 
         if len(df_tr) < 50 or len(df_te) < 5:
@@ -72,7 +79,10 @@ def walk_forward_eval(df: pd.DataFrame, n_windows: int = 4, test_months: int = 3
     return pd.DataFrame(results)
 
 
-def train_pipeline(market_name: str = "CAC40") -> tuple[AlphaEdgeEnsemble, dict]:
+# =============================================================================
+# PIPELINE D'ENTRAÎNEMENT
+# =============================================================================
+def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
     logger.info(f"Début du cycle d'entraînement AlphaEdge — {market_name}")
 
     data_path = DATA_DIR / "processed" / market_name / "monthly_features.parquet"
@@ -80,8 +90,8 @@ def train_pipeline(market_name: str = "CAC40") -> tuple[AlphaEdgeEnsemble, dict]
         raise FileNotFoundError(f"Fichier source introuvable : {data_path}")
 
     df = pd.read_parquet(data_path)
-    df = add_all_features(df)
 
+    # Eviter le leakage data
     df["future_return"] = df.groupby(level="ticker")["adj close"].pct_change(1).shift(-1)
     df["target"] = df["future_return"].gt(0).astype(int)
     df = df.dropna(subset=["target", "future_return"])
@@ -89,18 +99,23 @@ def train_pipeline(market_name: str = "CAC40") -> tuple[AlphaEdgeEnsemble, dict]
     dates = df.index.get_level_values("date")
     split_date = dates.max() - pd.DateOffset(months=6)
 
+    # Split temporel AVANT add_all_features pour éviter le leakage global
     df_train = df[dates <= split_date].copy()
     df_test = df[dates > split_date].copy()
+
+    df_train = add_all_features(df_train)
+    df_test = add_all_features(df_test)
 
     if len(df_train) < 100:
         raise ValueError(f"Volume de données insuffisant : {len(df_train)}")
 
+    # Baseline
     all_feats = [f for g in FEATURE_GROUPS.values() for f in g]
     available = [f for f in all_feats if f in df_train.columns]
-
     dummy = DummyClassifier(strategy="most_frequent").fit(df_train[available], df_train["target"])
     baseline_auc = roc_auc_score(df_test["target"], dummy.predict_proba(df_test[available])[:, 1])
 
+    # Entraînement
     model = AlphaEdgeEnsemble(n_optuna_trials=50)
     model.fit(df_train, df_train["target"])
 
@@ -113,68 +128,91 @@ def train_pipeline(market_name: str = "CAC40") -> tuple[AlphaEdgeEnsemble, dict]
     logger.info(f"ML -> AUC : {final_auc:.4f} | APR : {final_apr:.4f} | Lift : +{lift:.4f}")
     logger.info(f"Finances -> Sharpe : {fin_metrics['sharpe']} | Max DD : {fin_metrics['max_drawdown']}")
 
-    wf_results = walk_forward_eval(df, n_windows=4, test_months=3, n_optuna_trials=20)
+    # Walk-forward sur df entier (target déjà calculé, pas de leakage supplémentaire)
+    df_full = pd.concat([df_train, df_test])
+    wf_results = walk_forward_eval(df_full, n_windows=4, test_months=3, n_optuna_trials=20)
 
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    model.save(MODEL_DIR / "ensemble_model.pkl")
-    model.save(MODEL_DIR / "candidate_model.pkl")
-    logger.info("Modèle candidat sauvegardé : candidate_model.pkl")
+    # Sauvegarde locale par marché
+    market_model_dir = MODEL_DIR / market_name
+    market_model_dir.mkdir(parents=True, exist_ok=True)
+    model.save(market_model_dir / "ensemble_model.pkl")
+    logger.info(f"Modèle sauvegardé : {market_model_dir / 'ensemble_model.pkl'}")
 
     model_card = {
-        "market":        market_name,
-        "trained_at":    pd.Timestamp.now().isoformat(),
-        "architecture":  "XGBoost + LightGBM + Ridge → LogisticRegression",
+        "market":       market_name,
+        "trained_at":   pd.Timestamp.now().isoformat(),
+        "architecture": "XGBoost + LightGBM + Ridge → LogisticRegression",
         "metrics_ml": {
-            "auc_test":      round(final_auc, 4),
-            "apr_test":      round(final_apr, 4),
-            "baseline_auc":  round(baseline_auc, 4),
-            "lift":          round(lift, 4)
+            "auc_test":     round(final_auc, 4),
+            "apr_test":     round(final_apr, 4),
+            "baseline_auc": round(baseline_auc, 4),
+            "lift":         round(lift, 4),
         },
-        "metrics_fin": fin_metrics,
+        "metrics_fin":   fin_metrics,
         "model_weights": model.get_model_weights(),
         "walk_forward":  wf_results.to_dict(orient="records") if not wf_results.empty else [],
         "n_features":    len(model.features_),
         "train_size":    len(df_train),
         "test_size":     len(df_test),
     }
-    with open(MODEL_DIR / "model_card.json", "w") as f:
+    with open(market_model_dir / "model_card.json", "w") as f:
         json.dump(model_card, f, indent=2)
 
+    # MLflow
     if USE_MLFLOW:
         registered_model_name = f"AlphaEdge_Ensemble_{market_name}"
-        with mlflow.start_run(run_name=f"Ensemble_{market_name}") as run:
-            mlflow.log_params({
-                "architecture": "XGB+LGB+Ridge->LR",
-                "market":       market_name,
-                "n_features":   len(model.features_)
-            })
-            mlflow.log_metrics({
-                "AUC_Test":     final_auc,
-                "APR_Test":     final_apr,
-                "Sharpe_Ratio": fin_metrics["sharpe"],
-                "Max_Drawdown": fin_metrics["max_drawdown"],
-                "Total_Return": fin_metrics["total_return"],
-                "WF_AUC_mean":  wf_results["auc"].mean() if not wf_results.empty else 0.0
-            })
-            mlflow.log_dict(model_card, "model_card.json")
-            mlflow.sklearn.log_model(model, name="ensemble_model")
-            mv = mlflow.register_model(
-                model_uri=f"runs:/{run.info.run_id}/ensemble_model",
-                name=registered_model_name,
-            )
-            client = MlflowClient()
-            if fin_metrics["sharpe"] >= SHARPE_THRESHOLD and fin_metrics["max_drawdown"] >= MAX_DD_THRESHOLD:
-                client.set_registered_model_alias(registered_model_name, "champion", mv.version)
-                logger.info(f"Promotion : Version {mv.version} passe 'champion'.")
-            else:
-                logger.warning(
-                    "Promotion refusée : seuils de risque non atteints. Ancien champion maintenu."
+        try:
+            with mlflow.start_run(run_name=f"Ensemble_{market_name}") as run:
+                mlflow.log_params({
+                    "architecture": "XGB+LGB+Ridge->LR",
+                    "market":       market_name,
+                    "n_features":   len(model.features_),
+                })
+                mlflow.log_metrics({
+                    "AUC_Test":     final_auc,
+                    "APR_Test":     final_apr,
+                    "Sharpe_Ratio": fin_metrics["sharpe"],
+                    "Max_Drawdown": fin_metrics["max_drawdown"],
+                    "Total_Return": fin_metrics["total_return"],
+                    "WF_AUC_mean":  wf_results["auc"].mean() if not wf_results.empty else 0.0,
+                })
+                mlflow.log_dict(model_card, "model_card.json")
+                mlflow.sklearn.log_model(model, name="ensemble_model")
+                mv = mlflow.register_model(
+                    model_uri=f"runs:/{run.info.run_id}/ensemble_model",
+                    name=registered_model_name,
+                )
+                client = MlflowClient()
+                if (
+                    fin_metrics["sharpe"] >= SHARPE_THRESHOLD
+                    and fin_metrics["max_drawdown"] >= MAX_DD_THRESHOLD
+                ):
+                    client.set_registered_model_alias(registered_model_name, "champion", mv.version)
+                    logger.info(f"[{market_name}] Promotion : Version {mv.version} → 'champion'.")
+                else:
+                    logger.warning(
+                        f"[{market_name}] Promotion refusée : seuils non atteints. "
+                        "Ancien champion maintenu."
                     )
+        except Exception as e:
+            logger.error(f"[{market_name}] Échec MLflow ({e}) — modèle local sauvegardé uniquement.")
 
     return model, model_card
 
 
+# =============================================================================
+# ORCHESTRATEUR
+# =============================================================================
 if __name__ == "__main__":
-    config_path = CONFIG_DIR / "markets" / "cac40.json"
-    market = json.load(open(config_path))["market_name"] if config_path.exists() else "CAC40"
-    train_pipeline(market)
+    config_dir = CONFIG_DIR / "markets"
+    if not config_dir.exists():
+        raise FileNotFoundError(f"Dossier de configs introuvable : {config_dir}")
+
+    for config_file in sorted(config_dir.glob("*.json")):
+        with open(config_file) as f:
+            market_cfg = json.load(f)
+        market = market_cfg.get("market_name")
+        if not market:
+            logger.warning(f"Clé 'market_name' absente dans {config_file.name}, ignoré.")
+            continue
+        train_pipeline(market)

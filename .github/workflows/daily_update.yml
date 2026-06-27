@@ -28,7 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🚀 Execute Daily Pipeline
+      - name: Execute Daily Pipeline
         run: |
           echo "Starting portfolio analytics pipeline..."
           export PYTHONPATH=$PYTHONPATH:.
@@ -38,6 +38,9 @@ jobs:
           PYTHONUNBUFFERED: 1
           TZ: Europe/Paris
           HF_TOKEN: ${{ secrets.HF_TOKEN }} 
+          MLFLOW_TRACKING_USERNAME: "SORADATA"
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.HF_TOKEN }}
+
 
       - name: 📋 Generate job summary
         if: always()

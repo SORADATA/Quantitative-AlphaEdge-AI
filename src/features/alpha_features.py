@@ -25,8 +25,10 @@ logger = setup_logger("alpha_features")
 # UTILITAIRES
 # ══════════════════════════════════════════════════════════════════
 
+
 def _safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
     return a.div(b.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+
 
 def _rolling_sortino(returns: pd.Series, window: int = 6) -> pd.Series:
     def _sortino_scalar(r: np.ndarray) -> float:
@@ -36,12 +38,14 @@ def _rolling_sortino(returns: pd.Series, window: int = 6) -> pd.Series:
         return (np.mean(r) / np.std(neg)) * np.sqrt(12)
     return returns.rolling(window, min_periods=window // 2).apply(_sortino_scalar, raw=True)
 
+
 def _rolling_maxdrawdown(returns: pd.Series, window: int = 12) -> pd.Series:
     def _mdd(r: np.ndarray) -> float:
         cumulative = np.cumprod(1 + r)
         peak = np.maximum.accumulate(cumulative)
         return ((cumulative - peak) / peak).min()
     return returns.rolling(window, min_periods=window // 2).apply(_mdd, raw=True)
+
 
 def add_rank_features(df: pd.DataFrame) -> pd.DataFrame:
     features_to_rank = [
@@ -60,6 +64,7 @@ def add_rank_features(df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════════
 # 1. ÉTAPE JOURNALIÈRE (Appelé AVANT agrégation)
 # ══════════════════════════════════════════════════════════════════
+
 
 def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Calcule les indicateurs TA stricts sur les données journalières."""
@@ -84,7 +89,7 @@ def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
             df.loc[idx, "bb_mid"] = bb.bollinger_mavg().values
             df.loc[idx, "bb_high"] = bb.bollinger_hband().values
             df.loc[idx, "bb_position"] = (np.log1p(close) - bb.bollinger_lband()) / (bb.bollinger_hband() - bb.bollinger_lband() + 1e-9)
-            
+      
     df["atr"] = df.groupby(level=1, group_keys=False).apply(compute_atr)
     df["macd"] = df.groupby(level=1, group_keys=False).apply(compute_macd)
     df["macd_sign"] = np.sign(df["macd"].fillna(0))
@@ -100,23 +105,26 @@ def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # 2. ÉTAPE MENSUELLE (Appelé APRÈS agrégation)
 # ══════════════════════════════════════════════════════════════════
 
+
 def _add_momentum_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["return_1m"] = g["adj close"].transform(lambda x: x.pct_change(1))
     for lag in [2, 3, 6, 9, 12]:
         df[f"return_{lag}m"] = g["adj close"].transform(lambda x: x.pct_change(lag))
-        
+
     pct_12 = g["adj close"].transform(lambda x: x.pct_change(12))
     pct_1 = g["adj close"].transform(lambda x: x.pct_change(1))
     pct_6 = g["adj close"].transform(lambda x: x.pct_change(6))
-    
+
     df["mom_12_1"] = pct_12.div(pct_1.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
     df["mom_6_1"] = pct_6.div(pct_1.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
     df["mom_3_1"] = g["adj close"].transform(lambda x: x.pct_change(3))
     return df
 
+
 def calculate_returns(df: pd.DataFrame) -> pd.DataFrame:
     """Wrapper pour processor.py (mensuel)."""
     return _add_momentum_factors(df, df.groupby(level="ticker"))
+
 
 def _add_mean_reversion_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     ma12 = g["adj close"].transform(lambda x: x.rolling(12, min_periods=6).mean())
@@ -126,14 +134,16 @@ def _add_mean_reversion_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["nearness_52w_high"] = _safe_div(df["adj close"], high52)
     return df
 
+
 def _add_volatility_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["realized_vol_3m"] = g["return_1m"].transform(lambda x: x.rolling(3, min_periods=2).std() * np.sqrt(12))
     df["realized_vol_12m"] = g["return_1m"].transform(lambda x: x.rolling(12, min_periods=6).std() * np.sqrt(12))
     df["vol_ratio"] = df["realized_vol_3m"].div(df["realized_vol_12m"]).replace([np.inf, -np.inf], np.nan)
-    
+
     excess = df["return_1m"] - df["Mkt-RF"].fillna(0) if "Mkt-RF" in df.columns else df["return_1m"]
     df["idio_vol"] = excess.groupby(level=1).transform(lambda x: x.rolling(6, min_periods=3).std() * np.sqrt(12))
     return df
+
 
 def _add_risk_adjusted_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["sharpe_3m"] = _safe_div(
@@ -151,6 +161,7 @@ def _add_risk_adjusted_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     )
     return df
 
+
 def _add_tail_risk_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["return_skew_6m"] = g["return_1m"].transform(lambda x: x.rolling(6, min_periods=3).skew())
     df["return_kurt_6m"] = g["return_1m"].transform(lambda x: x.rolling(6, min_periods=3).kurt())
@@ -163,6 +174,7 @@ def _add_tail_risk_factors(df: pd.DataFrame, g) -> pd.DataFrame:
 
     df["cvar_5pct"] = g["return_1m"].transform(lambda x: x.rolling(12, min_periods=6).apply(_cvar, raw=True))
     return df
+
 
 def _add_technical_enrichment(df: pd.DataFrame, g) -> pd.DataFrame:
     """Enrichit les données techniques sur la base mensuelle."""
@@ -178,6 +190,7 @@ def _add_technical_enrichment(df: pd.DataFrame, g) -> pd.DataFrame:
             df[col] = 0.0
     return df
 
+
 def _add_seasonality_features(df: pd.DataFrame) -> pd.DataFrame:
     dates = df.index.get_level_values("date")
     df["month_sin"] = np.sin(2 * np.pi * dates.month / 12)
@@ -185,6 +198,7 @@ def _add_seasonality_features(df: pd.DataFrame) -> pd.DataFrame:
     df["is_q_end"] = dates.month.isin([3, 6, 9, 12]).astype(int)
     df["is_jan"] = (dates.month == 1).astype(int)
     return df
+
 
 def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
     """Récupère les facteurs Fama-French."""
@@ -207,7 +221,7 @@ def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
             X = factor_data.loc[factor_data.index.intersection(y.index)]
             y = y.loc[X.index]
             if len(y) <= MIN_HISTORY_FF: continue
-            
+
             params = RollingOLS(y, sm.add_constant(X[FAMA_FRENCH_FACTORS]), window=MIN_HISTORY_FF).fit().params.drop("const", axis=1)
             params["ticker"] = ticker
             betas_list.append(params)
@@ -219,15 +233,16 @@ def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
             return data
     except Exception as exc:
         logger.warning(f"Fama-French retrieval failed ({exc}).")
-    
+
     return data.assign(**{f: 0.0 for f in FAMA_FRENCH_FACTORS})
+
 
 def add_all_features(df: pd.DataFrame) -> pd.DataFrame:
     """Master pipeline exécuté sur les données mensuelles."""
-    if not isinstance(df.index, pd.MultiIndex): raise ValueError("MultiIndex requis.") 
+    if not isinstance(df.index, pd.MultiIndex): raise ValueError("MultiIndex requis.")
     df = df.copy()
     g = df.groupby(level="ticker")
-    
+
     logger.info("Computing alpha features...")
     df = _add_momentum_factors(df, g)
     df = _add_mean_reversion_factors(df, g)
@@ -237,13 +252,13 @@ def add_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _add_technical_enrichment(df, g)
     df = _add_seasonality_features(df)
     df = add_rank_features(df)
-    
+
     cols_to_lag = ["rsi", "macd", "bb_low", "bb_mid", "bb_high", "atr", "garman_klass_vol", 
                    "bb_position", "macd_sign", "Mkt-RF", "SMB", "HML", "RMW", "CMA"]
     for col in cols_to_lag:
         if col in df.columns:
             df[f"{col}_lag1"] = df.groupby(level="ticker")[col].shift(1)
-            
+
     df = df.fillna(0).replace([np.inf, -np.inf], 0)
     logger.info(f" Features prêtes. Shape : {df.shape}")
     return df

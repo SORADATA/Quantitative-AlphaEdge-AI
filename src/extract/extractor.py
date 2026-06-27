@@ -166,12 +166,12 @@ class MarketExtractor:
         if existing_df is not None:
             last_date = existing_df.index.get_level_values("date").max()
             start_date = (last_date - pd.Timedelta(days=_DELTA_OVERLAP_DAYS)).strftime("%Y-%m-%d")
-            logger.info(f"🕒 [{self.market_name}] Mise à jour depuis le {last_date.date()}...")
+            logger.info(f" [{self.market_name}] Mise à jour depuis le {last_date.date()}...")
         else:
             start_date = (
                 datetime.today() - pd.DateOffset(days=365 * self.history_years)
             ).strftime("%Y-%m-%d")
-            logger.info(f"📥 [{self.market_name}] Premier téléchargement complet...")
+            logger.info(f" [{self.market_name}] Premier téléchargement complet...")
 
         end_date = (datetime.today() + pd.DateOffset(days=1)).strftime("%Y-%m-%d")
 
