@@ -41,9 +41,10 @@ else:
 # =============================================================================
 def _log_sklearn_model_compat(model, artifact_subpath: str = "ensemble_model"):
     sig = inspect.signature(mlflow.sklearn.log_model)
+    kwargs = {"serialization_format": mlflow.sklearn.SERIALIZATION_FORMAT_PICKLE}
     if "name" in sig.parameters:
-        return mlflow.sklearn.log_model(model, name=artifact_subpath)
-    return mlflow.sklearn.log_model(model, artifact_path=artifact_subpath)
+        return mlflow.sklearn.log_model(model, name=artifact_subpath, **kwargs)
+    return mlflow.sklearn.log_model(model, artifact_path=artifact_subpath, **kwargs)
 
 
 def _check_registry_available(client: MlflowClient) -> bool:
