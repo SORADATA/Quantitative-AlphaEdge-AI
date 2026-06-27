@@ -1,6 +1,6 @@
 {
   "market": "CAC40",
-  "trained_at": "2026-06-27T17:51:54.550863",
+  "trained_at": "2026-06-27T21:43:00.116097",
   "architecture": "XGBoost + LightGBM + Ridge \u2192 LogisticRegression",
   "metrics_ml": {
     "auc_test": 0.5517,
@@ -54,5 +54,12 @@
   ],
   "n_features": 50,
   "train_size": 4440,
-  "test_size": 279
+  "test_size": 279,
+  "mlflow": {
+    "attempted": false,
+    "success": false,
+    "run_id": null,
+    "version": null,
+    "promoted": false
+  }
 }
