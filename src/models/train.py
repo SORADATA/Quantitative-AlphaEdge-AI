@@ -1,6 +1,7 @@
 import os
 import json
 import warnings
+import inspect
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +11,7 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
+from mlflow.exceptions import MlflowException
 
 from const import DATA_DIR, MODEL_DIR, CONFIG_DIR, SHARPE_THRESHOLD, MAX_DD_THRESHOLD
 from src.utils.metrics import calculate_financial_metrics
@@ -29,6 +31,35 @@ if USE_MLFLOW:
     os.environ["MLFLOW_TRACKING_PASSWORD"] = HF_TOKEN
     mlflow.set_tracking_uri("https://soradata-alphaedge-registry.hf.space")
     mlflow.set_experiment("AlphaEdge_Ensemble_Production")
+    logger.info(f"MLflow activé — tracking URI : {mlflow.get_tracking_uri()}")
+else:
+    logger.warning("HF_TOKEN absent — MLflow désactivé, entraînement local uniquement.")
+
+
+# =============================================================================
+# HELPERS MLFLOW
+# =============================================================================
+def _log_sklearn_model_compat(model, artifact_subpath: str = "ensemble_model"):
+    sig = inspect.signature(mlflow.sklearn.log_model)
+    if "name" in sig.parameters:
+        return mlflow.sklearn.log_model(model, name=artifact_subpath)
+    return mlflow.sklearn.log_model(model, artifact_path=artifact_subpath)
+
+
+def _check_registry_available(client: MlflowClient) -> bool:
+    """
+    Vérifie que le backend MLflow distant supporte le Model Registry
+    avant de tenter un register_model (sinon erreur explicite et claire).
+    """
+    try:
+        client.search_registered_models(max_results=1)
+        return True
+    except MlflowException as e:
+        logger.error(
+            "Le Model Registry ne semble pas disponible sur le serveur MLflow distant "
+            f"(backend-store probablement non compatible) : {e}"
+        )
+        return False
 
 
 # =============================================================================
@@ -132,7 +163,7 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
     df_full = pd.concat([df_train, df_test])
     wf_results = walk_forward_eval(df_full, n_windows=4, test_months=3, n_optuna_trials=20)
 
-    # Sauvegarde locale par marché
+    # Sauvegarde locale par marché (TOUJOURS faite, indépendamment de MLflow)
     market_model_dir = MODEL_DIR / market_name
     market_model_dir.mkdir(parents=True, exist_ok=True)
     model.save(market_model_dir / "ensemble_model.pkl")
@@ -154,13 +185,30 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
         "n_features":    len(model.features_),
         "train_size":    len(df_train),
         "test_size":     len(df_test),
+        "mlflow": {
+            "attempted": USE_MLFLOW,
+            "success":   False,
+            "run_id":    None,
+            "version":   None,
+            "promoted":  False,
+        },
     }
     with open(market_model_dir / "model_card.json", "w") as f:
         json.dump(model_card, f, indent=2)
 
-    # MLflow
+    # =========================================================================
+    # MLFLOW — chaque étape est tracée, aucune exception n'est avalée silencieusement
+    # =========================================================================
     if USE_MLFLOW:
         registered_model_name = f"AlphaEdge_Ensemble_{market_name}"
+        client = MlflowClient()
+
+        if not _check_registry_available(client):
+            logger.error(
+                f"[{market_name}] Model Registry indisponible — le run sera loggé "
+                "mais ne sera PAS enregistré dans le registre."
+            )
+
         try:
             with mlflow.start_run(run_name=f"Ensemble_{market_name}") as run:
                 mlflow.log_params({
@@ -177,25 +225,63 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
                     "WF_AUC_mean":  wf_results["auc"].mean() if not wf_results.empty else 0.0,
                 })
                 mlflow.log_dict(model_card, "model_card.json")
-                mlflow.sklearn.log_model(model, name="ensemble_model")
-                mv = mlflow.register_model(
-                    model_uri=f"runs:/{run.info.run_id}/ensemble_model",
-                    name=registered_model_name,
-                )
-                client = MlflowClient()
-                if (
-                    fin_metrics["sharpe"] >= SHARPE_THRESHOLD
-                    and fin_metrics["max_drawdown"] >= MAX_DD_THRESHOLD
-                ):
-                    client.set_registered_model_alias(registered_model_name, "champion", mv.version)
-                    logger.info(f"[{market_name}] Promotion : Version {mv.version} → 'champion'.")
-                else:
-                    logger.warning(
-                        f"[{market_name}] Promotion refusée : seuils non atteints. "
-                        "Ancien champion maintenu."
+
+                model_info = _log_sklearn_model_compat(model, "ensemble_model")
+                logger.info(f"[{market_name}] Modèle loggé sur MLflow — run_id={run.info.run_id}")
+
+                model_card["mlflow"]["success"] = True
+                model_card["mlflow"]["run_id"] = run.info.run_id
+
+                # Enregistrement dans le Model Registry (étape séparée pour isoler les erreurs)
+                try:
+                    mv = mlflow.register_model(
+                        model_uri=f"runs:/{run.info.run_id}/ensemble_model",
+                        name=registered_model_name,
                     )
-        except Exception as e:
-            logger.error(f"[{market_name}] Échec MLflow ({e}) — modèle local sauvegardé uniquement.")
+                    model_card["mlflow"]["version"] = mv.version
+                    logger.info(
+                        f"[{market_name}] Modèle enregistré : "
+                        f"{registered_model_name} v{mv.version}"
+                    )
+
+                    if (
+                        fin_metrics["sharpe"] >= SHARPE_THRESHOLD
+                        and fin_metrics["max_drawdown"] >= MAX_DD_THRESHOLD
+                    ):
+                        client.set_registered_model_alias(
+                            registered_model_name, "champion", mv.version
+                        )
+                        model_card["mlflow"]["promoted"] = True
+                        logger.info(
+                            f"[{market_name}] Promotion : Version {mv.version} → 'champion'."
+                        )
+                    else:
+                        logger.warning(
+                            f"[{market_name}] Promotion refusée : seuils non atteints "
+                            f"(Sharpe={fin_metrics['sharpe']:.2f}, "
+                            f"MaxDD={fin_metrics['max_drawdown']:.2f}). "
+                            "Ancien champion maintenu."
+                        )
+                except MlflowException:
+                    logger.exception(
+                        f"[{market_name}] Échec de l'enregistrement dans le Model Registry "
+                        "— le run reste loggé mais le modèle n'est pas versionné."
+                    )
+
+        except MlflowException:
+            logger.exception(
+                f"[{market_name}] Échec MLflow (erreur API/connexion) — "
+                "modèle local sauvegardé uniquement."
+            )
+        except Exception:
+            logger.exception(
+                f"[{market_name}] Échec MLflow (erreur inattendue) — "
+                "modèle local sauvegardé uniquement."
+            )
+
+        # Re-sauvegarde du model_card avec le statut MLflow final
+        with open(market_model_dir / "model_card.json", "w") as f:
+            json.dump(model_card, f, indent=2)
 
     return model, model_card
 
@@ -208,6 +294,7 @@ if __name__ == "__main__":
     if not config_dir.exists():
         raise FileNotFoundError(f"Dossier de configs introuvable : {config_dir}")
 
+    failures = []
     for config_file in sorted(config_dir.glob("*.json")):
         with open(config_file) as f:
             market_cfg = json.load(f)
@@ -215,4 +302,12 @@ if __name__ == "__main__":
         if not market:
             logger.warning(f"Clé 'market_name' absente dans {config_file.name}, ignoré.")
             continue
-        train_pipeline(market)
+        try:
+            train_pipeline(market)
+        except Exception:
+            logger.exception(f"[{market}] Échec complet du pipeline d'entraînement.")
+            failures.append(market)
+
+    if failures:
+        logger.error(f"Marchés en échec : {failures}")
+        raise SystemExit(1)  # force le job CI à apparaître en échec (rouge)
