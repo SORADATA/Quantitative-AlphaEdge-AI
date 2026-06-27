@@ -1,10 +1,9 @@
-"""
-Alpha Features - Production Grade
-Sépare formellement les indicateurs journaliers (TA) de l'enrichissement mensuel (Alpha).
-"""
+
+import warnings
 
 import numpy as np
 import pandas as pd
+import pandas_datareader.data as web
 import statsmodels.api as sm
 from statsmodels.regression.rolling import RollingOLS
 from ta.momentum import RSIIndicator
@@ -21,10 +20,10 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger("alpha_features")
 
+
 # ══════════════════════════════════════════════════════════════════
 # UTILITAIRES
 # ══════════════════════════════════════════════════════════════════
-
 
 def _safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
     return a.div(b.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
@@ -61,16 +60,14 @@ def add_rank_features(df: pd.DataFrame) -> pd.DataFrame:
             df[rank_col] = 0.5
     return df.fillna({f"{f}_rank": 0.5 for f in features_to_rank})
 
-# ══════════════════════════════════════════════════════════════════
-# 1. ÉTAPE JOURNALIÈRE (Appelé AVANT agrégation)
-# ══════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════
+# 1. ÉTAPE JOURNALIÈRE
+# ══════════════════════════════════════════════════════════════════
 
 def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Calcule les indicateurs TA stricts sur les données journalières."""
     logger.info("Computing daily technical indicators...")
-    
-    # Garman-Klass Volatility avec OHLC journalier
+
     if all(col in df.columns for col in ["high", "low", "open", "adj close"]):
         df["garman_klass_vol"] = (
             (np.log(df["high"]) - np.log(df["low"])) ** 2 / 2
@@ -88,8 +85,11 @@ def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
             df.loc[idx, "bb_low"] = bb.bollinger_lband().values
             df.loc[idx, "bb_mid"] = bb.bollinger_mavg().values
             df.loc[idx, "bb_high"] = bb.bollinger_hband().values
-            df.loc[idx, "bb_position"] = (np.log1p(close) - bb.bollinger_lband()) / (bb.bollinger_hband() - bb.bollinger_lband() + 1e-9)
-      
+            df.loc[idx, "bb_position"] = (
+                (np.log1p(close) - bb.bollinger_lband())
+                / (bb.bollinger_hband() - bb.bollinger_lband() + 1e-9)
+            )
+
     df["atr"] = df.groupby(level=1, group_keys=False).apply(compute_atr)
     df["macd"] = df.groupby(level=1, group_keys=False).apply(compute_macd)
     df["macd_sign"] = np.sign(df["macd"].fillna(0))
@@ -101,10 +101,10 @@ def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-# ══════════════════════════════════════════════════════════════════
-# 2. ÉTAPE MENSUELLE (Appelé APRÈS agrégation)
-# ══════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════
+# 2. ÉTAPE MENSUELLE
+# ══════════════════════════════════════════════════════════════════
 
 def _add_momentum_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["return_1m"] = g["adj close"].transform(lambda x: x.pct_change(1))
@@ -122,7 +122,6 @@ def _add_momentum_factors(df: pd.DataFrame, g) -> pd.DataFrame:
 
 
 def calculate_returns(df: pd.DataFrame) -> pd.DataFrame:
-    """Wrapper pour processor.py (mensuel)."""
     return _add_momentum_factors(df, df.groupby(level="ticker"))
 
 
@@ -177,14 +176,21 @@ def _add_tail_risk_factors(df: pd.DataFrame, g) -> pd.DataFrame:
 
 
 def _add_technical_enrichment(df: pd.DataFrame, g) -> pd.DataFrame:
-    """Enrichit les données techniques sur la base mensuelle."""
     if "rsi" in df.columns:
-        df["rsi_divergence"] = g["adj close"].transform(lambda x: x.pct_change(3)) - g["rsi"].transform(lambda x: x.pct_change(3))
+        df["rsi_divergence"] = (
+            g["adj close"].transform(lambda x: x.pct_change(3))
+            - g["rsi"].transform(lambda x: x.pct_change(3))
+        )
 
     if "euro_volume" in df.columns:
         df["amihud_illiquidity"] = _safe_div(df["return_1m"].abs(), df["euro_volume"])
         df["volume_trend_3m"] = g["euro_volume"].transform(lambda x: x.pct_change(3))
-        df["volume_zscore"] = g["euro_volume"].transform(lambda x: _safe_div(x - x.rolling(12, min_periods=6).mean(), x.rolling(12, min_periods=6).std()))
+        df["volume_zscore"] = g["euro_volume"].transform(
+            lambda x: _safe_div(
+                x - x.rolling(12, min_periods=6).mean(),
+                x.rolling(12, min_periods=6).std(),
+            )
+        )
     else:
         for col in ["amihud_illiquidity", "volume_trend_3m", "volume_zscore"]:
             df[col] = 0.0
@@ -201,11 +207,12 @@ def _add_seasonality_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
-    """Récupère les facteurs Fama-French."""
     logger.info("Retrieving Fama-French factors...")
     try:
-        import pandas_datareader.data as web
-        factor_data = web.DataReader("Europe_5_Factors", "famafrench", start="2010")[0].drop("RF", axis=1)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*date_parser.*")
+            factor_data = web.DataReader("Europe_5_Factors", "famafrench", start="2010")[0].drop("RF", axis=1)
+
         factor_data.index = pd.to_datetime(factor_data.index.to_timestamp()).tz_localize(None)
         factor_data = factor_data.resample("BME").last().div(100)
         factor_data.index.name = "date"
@@ -217,20 +224,34 @@ def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
         for ticker in data.index.get_level_values(1).unique():
             ticker_data = data.xs(ticker, level=1)
             y = ticker_data["return_1m"].dropna()
-            if y.empty: continue
+            if y.empty:
+                continue
             X = factor_data.loc[factor_data.index.intersection(y.index)]
             y = y.loc[X.index]
-            if len(y) <= MIN_HISTORY_FF: continue
+            if len(y) <= MIN_HISTORY_FF:
+                continue
 
-            params = RollingOLS(y, sm.add_constant(X[FAMA_FRENCH_FACTORS]), window=MIN_HISTORY_FF).fit().params.drop("const", axis=1)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*divide by zero.*")
+                params = (
+                    RollingOLS(y, sm.add_constant(X[FAMA_FRENCH_FACTORS]), window=MIN_HISTORY_FF)
+                    .fit()
+                    .params
+                    .drop("const", axis=1)
+                )
+
             params["ticker"] = ticker
             betas_list.append(params)
 
         if betas_list:
             betas_df = pd.concat(betas_list).set_index("ticker", append=True)
             data = data.join(betas_df.groupby("ticker").shift())
-            data[FAMA_FRENCH_FACTORS] = data.groupby(level="ticker", group_keys=False)[FAMA_FRENCH_FACTORS].transform(lambda x: x.fillna(x.mean()))
+            data[FAMA_FRENCH_FACTORS] = (
+                data.groupby(level="ticker", group_keys=False)[FAMA_FRENCH_FACTORS]
+                .transform(lambda x: x.fillna(x.mean()))
+            )
             return data
+
     except Exception as exc:
         logger.warning(f"Fama-French retrieval failed ({exc}).")
 
@@ -238,8 +259,8 @@ def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_all_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Master pipeline exécuté sur les données mensuelles."""
-    if not isinstance(df.index, pd.MultiIndex): raise ValueError("MultiIndex requis.")
+    if not isinstance(df.index, pd.MultiIndex):
+        raise ValueError("MultiIndex requis.")
     df = df.copy()
     g = df.groupby(level="ticker")
 
@@ -253,8 +274,11 @@ def add_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _add_seasonality_features(df)
     df = add_rank_features(df)
 
-    cols_to_lag = ["rsi", "macd", "bb_low", "bb_mid", "bb_high", "atr", "garman_klass_vol", 
-                   "bb_position", "macd_sign", "Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+    cols_to_lag = [
+        "rsi", "macd", "bb_low", "bb_mid", "bb_high", "atr",
+        "garman_klass_vol", "bb_position", "macd_sign",
+        "Mkt-RF", "SMB", "HML", "RMW", "CMA",
+    ]
     for col in cols_to_lag:
         if col in df.columns:
             df[f"{col}_lag1"] = df.groupby(level="ticker")[col].shift(1)
