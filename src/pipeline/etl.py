@@ -1,137 +1,76 @@
 import json
-import time
 import pickle
 from datetime import datetime
 from typing import Optional, Tuple, Any
 
 import pandas as pd
-import yfinance as yf
 
-from const import DATA_DIR, BASE_DIR, VARS_TO_LAG, RESAMPLE_MEAN_COLS, RESAMPLE_LAST_EXCLUDE
-from src.transform.features import (
-    compute_technical_indicators,
-    calculate_returns,
-    get_fama_french_betas
-)
-from src.transform.ticker_manager import handle_ticker_changes, validate_and_clean_tickers
-from src.utils.config_loader import TICKERS
+from const import DATA_DIR, BASE_DIR
+from src.extract.extractor import MarketExtractor
+from src.transform.processor import MarketDataProcessor
+from src.transform.ticker_manager import handle_ticker_changes
 from src.utils.logger import setup_logger
 
 logger = setup_logger("etl")
 
-_DOWNLOAD_RETRIES = 3
-_DOWNLOAD_RETRY_WAIT = 5
-_HISTORY_YEARS = 10
 
-
-def _download_raw_prices(tickers: list[str]) -> Optional[pd.DataFrame]:
-    """Downloads adjusted OHLCV data from Yahoo Finance with retry logic."""
-    end = (datetime.today() + pd.DateOffset(days=1)).strftime("%Y-%m-%d")
-    start = (pd.Timestamp.today() - pd.DateOffset(years=_HISTORY_YEARS)).strftime("%Y-%m-%d")
-
-    logger.info(f"Downloading market data ({start} → {end}) for {len(tickers)} assets...")
-
-    for attempt in range(1, _DOWNLOAD_RETRIES + 1):
-        try:
-            df = yf.download(
-                tickers,
-                start=start,
-                end=end,
-                progress=False,
-                auto_adjust=False,
-                threads=True,
-            )
-            if not df.empty:
-                logger.info(f"Download successful (attempt {attempt})")
-                return df
-            logger.warning(f"Empty response (attempt {attempt})")
-        except Exception as exc:
-            logger.warning(f"Download error (attempt {attempt}): {exc}")
-            time.sleep(_DOWNLOAD_RETRY_WAIT)
-    return None
-
-
-def _resample_to_monthly(df: pd.DataFrame) -> pd.DataFrame:
-    """Resamples daily data to business-month-end frequency."""
-    last_cols = [c for c in df.columns if c not in RESAMPLE_LAST_EXCLUDE]
-
-    monthly = pd.concat(
-        [
-            df.unstack("ticker")[RESAMPLE_MEAN_COLS[0]]
-            .resample("BM").mean()
-            .stack("ticker")
-            .to_frame(RESAMPLE_MEAN_COLS[0]),
-            df.unstack()[last_cols].resample("BM").last().stack("ticker"),
-        ],
-        axis=1,
-    ).dropna()
-    return monthly
-
-
-def get_data_pipeline() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-    """Full ETL pipeline orchestrator."""
+def get_data_pipeline(market_config: dict) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """Orchestrateur global du pipeline ETL : Extract -> Process -> Load."""
+    market_name = market_config['market_name']
+    tickers = market_config['tickers']
+    # Résolution des tickers (changement de noms, delisting)
     ticker_changes, delisted = handle_ticker_changes()
     active_tickers = [
-        ticker_changes.get(t, t)
-        for t in TICKERS
-        if t not in delisted
+        ticker_changes.get(t, t) for t in tickers if t not in delisted
     ]
 
-    raw = _download_raw_prices(active_tickers)
-    if raw is None:
+    # ==========================================
+    # 1. EXTRACT (Extraction)
+    # ==========================================
+    extractor = MarketExtractor(market_name=market_name, tickers=active_tickers)
+    raw = extractor.fetch_market_data()
+    if raw is None or raw.empty:
+        logger.error(f"Abandon du pipeline pour {market_name} : Aucune donnée extraite.")
         return None, None
 
-    df = raw.stack(future_stack=True)
-    df.index.names = ["date", "ticker"]
-    df.columns = df.columns.str.lower()
-    if "adj close" not in df.columns and "close" in df.columns:
-        df["adj close"] = df["close"]
+    # ==========================================
+    # 2. TRANSFORM (Processing)
+    # ==========================================
+    processor = MarketDataProcessor(active_tickers=active_tickers)
+    df_daily, df_monthly, alerts = processor.process(raw)
 
-    df, valid_tickers, alerts = validate_and_clean_tickers(df, active_tickers)
-
-    # Sauvegarde des logs de validation
+    # ==========================================
+    # 3. LOAD
+    # ==========================================
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(BASE_DIR / "ticker_validation.json", "w") as fh:
+    with open(BASE_DIR / f"{market_name}_ticker_validation.json", "w") as fh:
         json.dump(
-            {"date": str(datetime.now()), "alerts": alerts, "valid_tickers": len(valid_tickers)},
+            {
+                "date": str(datetime.now()),
+                "alerts": alerts,
+                "valid_tickers": len(active_tickers) - len(alerts)
+            },
             fh, indent=2,
         )
 
-    logger.info(f"Saving raw data to {DATA_DIR}...")
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(DATA_DIR / "daily_raw.parquet", compression="gzip")
+    processed_dir = DATA_DIR / "processed" / market_name
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Sauvegarde des données dans {processed_dir}...")
+    df_daily.to_parquet(processed_dir / "daily_raw.parquet", compression="gzip")
+    df_monthly.to_parquet(processed_dir / "monthly_features.parquet", compression="gzip")
 
-    # Calcul des indicateurs (la fonction corrigée)
-    df = compute_technical_indicators(df)
-
-    logger.info("Resampling to monthly frequency...")
-    df_monthly = _resample_to_monthly(df)
-    df_monthly = df_monthly.groupby(level=1, group_keys=False).apply(calculate_returns)
-    df_monthly = get_fama_french_betas(df_monthly)
-
-    # Ajout des lags
-    for col in VARS_TO_LAG:
-        if col in df_monthly.columns:
-            df_monthly[f"{col}_lag1"] = df_monthly.groupby("ticker")[col].shift(1)
-
-    logger.info("Saving monthly features...")
-    df_monthly.to_parquet(DATA_DIR / "monthly_features.parquet", compression="gzip")
-
-    return df, df_monthly
+    return df_daily, df_monthly
 
 
 def load_models() -> Tuple[Optional[Any], Optional[Any]]:
-    """
-    Charge les modèles pré-entraînés XGBoost et KMeans depuis le dossier MODEL_DIR.
-    """
+    """Charge les modèles pré-entraînés XGBoost et KMeans depuis MODEL_DIR."""
     from const import MODEL_DIR
     logger.info(f"Loading ML models from {MODEL_DIR}...")
     try:
-        # On s'assure que les fichiers existent avant d'ouvrir
         xgb_path = MODEL_DIR / 'xgboost_model.pkl'
         kmeans_path = MODEL_DIR / 'kmeans_model.pkl'
         if not xgb_path.exists() or not kmeans_path.exists():
-            logger.error("Model files missing in MODEL_DIR.")
+            logger.error("Modèles introuvables dans MODEL_DIR.")
             return None, None
 
         with open(xgb_path, 'rb') as f:
@@ -140,5 +79,29 @@ def load_models() -> Tuple[Optional[Any], Optional[Any]]:
             kmeans = pickle.load(f)
         return xgb, kmeans
     except Exception as e:
-        logger.error(f"Error loading models: {e}")
+        logger.error(f"Erreur lors du chargement des modèles : {e}")
         return None, None
+# ==========================================
+# BLOC DE TEST LOCAL
+# ==========================================
+if __name__ == "__main__":
+    import sys
+    import json
+    from pathlib import Path
+
+    config_path = Path("config/markets/cac40.json")
+    if config_path.exists():
+        config = json.load(open(config_path))
+    else:
+        config = {
+            "market_name": "CAC40_Test",
+            "tickers": ["AI.PA", "AIR.PA", "OR.PA"]
+        }
+
+    print(f"Lancement ETL — {config['market_name']}...")
+    df_daily, df_monthly = get_data_pipeline(config)
+
+    if df_daily is not None:
+        print(f"✅ Succès ! Shape daily: {df_daily.shape}, Shape monthly: {df_monthly.shape}")
+    else:
+        print("❌ Échec.")
