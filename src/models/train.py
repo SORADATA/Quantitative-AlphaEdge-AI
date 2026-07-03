@@ -1,7 +1,6 @@
 import os
 import json
 import warnings
-import inspect
 from pathlib import Path
 
 import pandas as pd
@@ -9,9 +8,9 @@ from dotenv import load_dotenv
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import roc_auc_score, average_precision_score
 import mlflow
-import mlflow.sklearn
 from mlflow.tracking import MlflowClient
 from mlflow.exceptions import MlflowException
+from mlflow.models.signature import infer_signature
 
 from const import DATA_DIR, MODEL_DIR, CONFIG_DIR, SHARPE_THRESHOLD, MAX_DD_THRESHOLD
 from src.utils.metrics import calculate_financial_metrics
@@ -39,13 +38,6 @@ else:
 # =============================================================================
 # HELPERS MLFLOW
 # =============================================================================
-def _log_sklearn_model_compat(model, artifact_subpath: str = "ensemble_model"):
-    sig = inspect.signature(mlflow.sklearn.log_model)
-    if "name" in sig.parameters:
-        return mlflow.sklearn.log_model(model, name=artifact_subpath)
-    return mlflow.sklearn.log_model(model, artifact_path=artifact_subpath)
-
-
 def _check_registry_available(client: MlflowClient) -> bool:
     """
     Vérifie que le backend MLflow distant supporte le Model Registry
@@ -108,6 +100,19 @@ def walk_forward_eval(
         )
 
     return pd.DataFrame(results)
+
+
+# =============================================================================
+# WRAPPER MLFLOW PYFUNC
+# =============================================================================
+class AlphaEdgePyFunc(mlflow.pyfunc.PythonModel):
+    def __init__(self, model_instance):
+        self.model = model_instance
+
+    def predict(self, context, model_input, params=None):
+        # MLflow s'attend à recevoir un DataFrame en entrée
+        # On retourne uniquement la probabilité de la classe 1 (le signal d'achat)
+        return self.model.predict_proba(model_input)[:, 1]
 
 
 # =============================================================================
@@ -179,7 +184,7 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
             "baseline_auc": round(baseline_auc, 4),
             "lift":         round(lift, 4),
         },
-        "metrics_fin":   fin_metrics,
+        "metrics_fin":  fin_metrics,
         "model_weights": model.get_model_weights(),
         "walk_forward":  wf_results.to_dict(orient="records") if not wf_results.empty else [],
         "n_features":    len(model.features_),
@@ -226,13 +231,28 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
                 })
                 mlflow.log_dict(model_card, "model_card.json")
 
-                model_info = _log_sklearn_model_compat(model, "ensemble_model")
+                # --- Création de l'instance PyFunc et de la Signature ---
+                pyfunc_model = AlphaEdgePyFunc(model_instance=model)
+                
+                input_example = df_test[model.features_].head(5)
+                signature = infer_signature(
+                    model_input=input_example, 
+                    model_output=pyfunc_model.predict(context=None, model_input=input_example)
+                )
+
+                model_info = mlflow.pyfunc.log_model(
+                    artifact_path="ensemble_model",
+                    python_model=pyfunc_model,
+                    signature=signature,
+                    input_example=input_example
+                )
+
                 logger.info(f"[{market_name}] Modèle loggé sur MLflow — run_id={run.info.run_id}")
 
                 model_card["mlflow"]["success"] = True
                 model_card["mlflow"]["run_id"] = run.info.run_id
 
-                # Enregistrement dans le Model Registry (étape séparée pour isoler les erreurs)
+                # Enregistrement dans le Model Registry
                 try:
                     mv = mlflow.register_model(
                         model_uri=f"runs:/{run.info.run_id}/ensemble_model",
@@ -310,4 +330,4 @@ if __name__ == "__main__":
 
     if failures:
         logger.error(f"Marchés en échec : {failures}")
-        raise SystemExit(1)  # force le job CI à apparaître en échec (rouge)
+        raise SystemExit(1)
