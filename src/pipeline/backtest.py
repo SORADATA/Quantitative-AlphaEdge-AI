@@ -51,19 +51,44 @@ def get_optimal_weights(prices_df: pd.DataFrame, risk_free_rate: float = RISK_FR
             return {t: 1.0 / n for t in prices_df.columns}, "equal_weight"
 
 
+def _score_with_model(model: Any, X: pd.DataFrame) -> np.ndarray:
+    """
+    Point d'entrée unique pour scorer un DataFrame, quel que soit le type de modèle :
+      - AlphaEdgeEnsemble natif (local .pkl)      -> .predict_proba(X)[:, 1]
+      - mlflow.pyfunc.PyFuncModel (MLflow Registry) -> .predict(X) (déjà proba_upside, 1D)
+    Lève une exception explicite si aucune méthode compatible n'est trouvée.
+    """
+    if hasattr(model, "predict_proba"):
+        return model.predict_proba(X)[:, 1]
+
+    if hasattr(model, "predict"):
+        # Cas pyfunc MLflow : filtrer sur le schéma d'entrée si disponible
+        try:
+            input_schema = model.metadata.get_input_schema()
+            expected_cols = [c.name for c in input_schema.inputs] if input_schema else None
+        except Exception:
+            expected_cols = None
+
+        X_input = X[expected_cols] if expected_cols else X
+        preds = model.predict(X_input)
+        return np.asarray(preds).ravel()
+
+    raise TypeError(f"Type de modèle non supporté pour le scoring : {type(model)}")
+
+
 def _generate_monthly_signals(month_data: pd.DataFrame, model: Any) -> pd.DataFrame:
     """
     Génère les scores ML pour une coupe transversale (un mois ou une séance donnée).
-    Le modèle AlphaEdgeEnsemble extrait lui-même les features dont il a besoin.
+    Compatible avec un modèle natif AlphaEdgeEnsemble ou un pyfunc MLflow.
     """
     if month_data.empty:
         return pd.DataFrame()
 
     try:
         month_data = month_data.copy()
-        month_data["proba_upside"] = model.predict_proba(month_data)[:, 1]
+        month_data["proba_upside"] = _score_with_model(model, month_data)
     except Exception as e:
-        logger.error(f"predict_proba failed: {e}")
+        logger.error(f"Scoring du modèle échoué : {e}", exc_info=True)
         return pd.DataFrame()
 
     return month_data
@@ -325,6 +350,9 @@ def generate_live_signals(
                      calendaire, auquel cas un nouveau rebalancing est
                      déclenché et journalisé dans rebalance_history.
 
+    Compatible avec un modèle natif AlphaEdgeEnsemble ou un pyfunc MLflow
+    (voir _score_with_model).
+
     Retourne (df_signals, rebalance_history_updated).
     """
     empty_signals = pd.DataFrame(columns=["Ticker", "Signal", "Allocation", "Proba_Hausse"])
@@ -337,7 +365,7 @@ def generate_live_signals(
     snapshot_scored = _generate_monthly_signals(snapshot, model)
 
     if snapshot_scored.empty:
-        logger.warning(f"Aucun signal généré pour la séance {last_date.date()}.")
+        logger.warning(f"Aucun signal généré pour la séance {last_date.date()} — voir logs d'erreur du scoring ci-dessus.")
         return empty_signals, rebalance_history
 
     last_rebalance_date = rebalance_history.index.max() if not rebalance_history.empty else None
@@ -392,3 +420,4 @@ def generate_live_signals(
     )
 
     return df_signals, rebalance_history
+    

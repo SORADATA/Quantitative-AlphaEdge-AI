@@ -76,17 +76,17 @@ def load_rebalance_history_from_hf(market_name: str, local_fallback: Path) -> pd
 
 
 # =============================================================================
-# PIPELINE PRINCIPAL
+# PIPELINE PRINCIPAL (daily run)
 # =============================================================================
 def run_pipeline(market_config: dict) -> None:
     market_name = market_config.get("market_name", "UNKNOWN")
     logger = setup_logger(f"Pipeline_{market_name}")
-    logger.info(f"STARTING PIPELINE | MARKET: {market_name}")
+    logger.info(f"STARTING DAILY PIPELINE | MARKET: {market_name}")
 
     try:
-        # 1. Chargement du modèle champion
+        # 1. Chargement du modèle champion (MLflow pyfunc -> fallback local .pkl)
         model = load_champion(market_name)
-        logger.info(f"Modèle champion prêt pour {market_name}")
+        logger.info(f"Modèle champion prêt pour {market_name} | type={type(model).__name__}")
 
         # 2. ETL — récupère la séance N sur yfinance
         df_daily, df_monthly = get_data_pipeline(market_config)
@@ -113,7 +113,7 @@ def run_pipeline(market_config: dict) -> None:
         signals_path = base_dir / "latest_signals.parquet"
         metadata_path = base_dir / "data_metadata.json"
 
-        # 3. Backtest historique (référence de performance)
+        # 3. Backtest historique (référence de performance, alimente aussi le dashboard)
         logger.info(f"Executing backtest for {market_name}...")
         hist_df, rebal_df_backtest, metrics = backtest_strategy_with_rebalancing(
             df_daily_bt,
@@ -132,6 +132,12 @@ def run_pipeline(market_config: dict) -> None:
             df_daily_bt, daily_prices, model, rebalance_history,
         )
 
+        if signals_df.empty:
+            logger.error(
+                f"[{market_name}] ATTENTION : latest_signals est vide ! "
+                "Vérifier les logs de scoring ci-dessus (compatibilité modèle pyfunc/natif)."
+            )
+
         # 5. Sauvegarde locale
         hist_df.to_parquet(hist_path)
         rebalance_history_updated.to_parquet(rebal_path)
@@ -141,6 +147,7 @@ def run_pipeline(market_config: dict) -> None:
             "market_name":       market_name,
             "last_run_utc":      datetime.now(timezone.utc).isoformat(),
             "last_session_date": str(last_session.date()),
+            "model_type":        type(model).__name__,
             "n_signals":         len(signals_df),
             "n_buy_signals":     int((signals_df["Signal"] == "BUY").sum()) if not signals_df.empty else 0,
             "last_rebalance":    str(rebalance_history_updated.index.max().date())
