@@ -1,8 +1,7 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from pypfopt import EfficientFrontier, risk_models, expected_returns, objective_functions
-
 
 from const import (
     TRADING_DAYS_YEAR,
@@ -13,6 +12,7 @@ from const import (
     PROBA_MIN,
     WEIGHT_BOUNDS
 )
+from src.features.alpha_features import add_all_features
 from src.utils.logger import setup_logger
 from src.utils.market_utils import get_benchmark_returns
 
@@ -53,7 +53,7 @@ def get_optimal_weights(prices_df: pd.DataFrame, risk_free_rate: float = RISK_FR
 
 def _generate_monthly_signals(month_data: pd.DataFrame, model: Any) -> pd.DataFrame:
     """
-    Génère les signaux ML pour un mois donné.
+    Génère les scores ML pour une coupe transversale (un mois ou une séance donnée).
     Le modèle AlphaEdgeEnsemble extrait lui-même les features dont il a besoin.
     """
     if month_data.empty:
@@ -224,7 +224,7 @@ def backtest_strategy_with_rebalancing(
     benchmark_value = 100.0
     all_records = []
     rebalance_log = []
-    drifted_allocation: Dict[str, float] = {} 
+    drifted_allocation: Dict[str, float] = {}
     monthly_dates = df_monthly.index.get_level_values("date").unique().sort_values()
 
     for i, month_date in enumerate(monthly_dates[:-1]):
@@ -281,3 +281,114 @@ def backtest_strategy_with_rebalancing(
     logger.info(f" Backtest complete | Final value: {portfolio_value:.2f}")
 
     return results_df, rebalance_df, metrics
+
+
+# =============================================================================
+# SIGNAUX LIVE (production) — tourne chaque jour sur la séance N
+# =============================================================================
+def _build_daily_snapshot(df_daily: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Timestamp]:
+    """
+    Construit une coupe transversale (une ligne par ticker) à partir des
+    données journalières les plus récentes disponibles (séance N).
+    """
+    last_date = df_daily.index.get_level_values("date").max()
+    df_feat = add_all_features(df_daily.copy())
+    snapshot = df_feat[df_feat.index.get_level_values("date") == last_date].copy()
+    return snapshot, last_date
+
+
+def _is_new_rebalance_period(last_date: pd.Timestamp, last_rebalance_date: Optional[pd.Timestamp]) -> bool:
+    """
+    Détermine si la séance N marque le début d'une nouvelle période de
+    rebalancing (nouveau mois calendaire) par rapport au dernier rebalancing
+    effectivement appliqué.
+    """
+    if last_rebalance_date is None:
+        return True
+    return (last_date.year, last_date.month) != (last_rebalance_date.year, last_rebalance_date.month)
+
+
+def generate_live_signals(
+    df_daily: pd.DataFrame,
+    daily_prices: pd.DataFrame,
+    model: Any,
+    rebalance_history: pd.DataFrame,
+    proba_min: float = PROBA_MIN,
+    max_stocks: int = MAX_STOCKS_SELECT,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Génère les signaux du jour (séance N) pour le dashboard.
+
+    - Proba_Hausse : recalculée chaque jour à partir des données fraîches.
+    - Allocation   : gelée depuis le dernier rebalancing mensuel réel, sauf
+                     si la séance N marque le passage à un nouveau mois
+                     calendaire, auquel cas un nouveau rebalancing est
+                     déclenché et journalisé dans rebalance_history.
+
+    Retourne (df_signals, rebalance_history_updated).
+    """
+    empty_signals = pd.DataFrame(columns=["Ticker", "Signal", "Allocation", "Proba_Hausse"])
+
+    if df_daily.empty:
+        logger.warning("df_daily vide — aucun signal live généré.")
+        return empty_signals, rebalance_history
+
+    snapshot, last_date = _build_daily_snapshot(df_daily)
+    snapshot_scored = _generate_monthly_signals(snapshot, model)
+
+    if snapshot_scored.empty:
+        logger.warning(f"Aucun signal généré pour la séance {last_date.date()}.")
+        return empty_signals, rebalance_history
+
+    last_rebalance_date = rebalance_history.index.max() if not rebalance_history.empty else None
+    new_period = _is_new_rebalance_period(last_date, last_rebalance_date)
+
+    if new_period:
+        logger.info(f"Nouvelle période de rebalancing détectée pour la séance {last_date.date()}.")
+        tickers = _select_tickers(snapshot_scored, proba_min, max_stocks)
+        allocation: Dict[str, float] = {}
+        optim_method = "no_signal"
+
+        if tickers:
+            available_tickers = [t for t in tickers if t in daily_prices.columns]
+            prices_subset = (
+                daily_prices[available_tickers]
+                .loc[:last_date]
+                .iloc[-TRADING_DAYS_YEAR:]
+                .dropna(axis=1, thresh=int(TRADING_DAYS_YEAR * 0.8))
+            )
+            if not prices_subset.empty:
+                weights, optim_method = get_optimal_weights(prices_subset)
+                allocation = {t: w for t, w in weights.items() if w > 1e-4}
+
+        new_row = pd.DataFrame([{
+            "N_Stocks":     len(allocation),
+            "Optim_Method": optim_method,
+            "Allocation":   allocation,
+            "Top_Ticker":   max(allocation, key=allocation.get) if allocation else None,
+        }], index=[last_date])
+        new_row.index.name = "Date"
+        rebalance_history = pd.concat([rebalance_history, new_row]).sort_index()
+        logger.info(f"Rebalancing appliqué | {len(allocation)} titres sélectionnés.")
+    else:
+        allocation = rebalance_history.loc[last_rebalance_date, "Allocation"] or {}
+        logger.info(
+            f"Allocation gelée depuis le {last_rebalance_date.date()} "
+            f"({len(allocation)} titres) — pas de nouveau rebalancing aujourd'hui."
+        )
+
+    out = snapshot_scored.reset_index().rename(columns={"ticker": "Ticker"})
+    out["Allocation"] = out["Ticker"].map(allocation).fillna(0.0)
+    out["Signal"] = np.where(out["Allocation"] > 0, "BUY", "NEUTRAL")
+    out["Proba_Hausse"] = (out["proba_upside"] * 100).round(1)
+
+    df_signals = out[["Ticker", "Signal", "Allocation", "Proba_Hausse"]].sort_values(
+        "Allocation", ascending=False
+    ).reset_index(drop=True)
+
+    logger.info(
+        f"Signaux journaliers générés | Séance: {last_date.date()} | "
+        f"BUY: {(df_signals['Signal'] == 'BUY').sum()} | Total: {len(df_signals)}"
+    )
+
+    return df_signals, rebalance_history
