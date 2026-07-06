@@ -53,23 +53,30 @@ def get_optimal_weights(prices_df: pd.DataFrame, risk_free_rate: float = RISK_FR
 
 def _score_with_model(model: Any, X: pd.DataFrame) -> np.ndarray:
     """
-    Point d'entrée unique pour scorer un DataFrame, quel que soit le type de modèle :
-      - AlphaEdgeEnsemble natif (local .pkl)      -> .predict_proba(X)[:, 1]
-      - mlflow.pyfunc.PyFuncModel (MLflow Registry) -> .predict(X) (déjà proba_upside, 1D)
-    Lève une exception explicite si aucune méthode compatible n'est trouvée.
+    Point d'entrée unique pour scorer un DataFrame.
+    Filtre les features exactes et gère les NaNs pour éviter les crashs du modèle en production.
     """
     if hasattr(model, "predict_proba"):
-        return model.predict_proba(X)[:, 1]
+        # Sécurité 1 : Ne garder que les features d'entraînement si le modèle les expose
+        if hasattr(model, "features_"):
+            X_input = X[model.features_].copy()
+        else:
+            X_input = X.copy()
+            
+        # Sécurité 2 : Imputer les NaNs
+        X_input = X_input.fillna(0)
+        return model.predict_proba(X_input)[:, 1]
 
     if hasattr(model, "predict"):
-        # Cas pyfunc MLflow : filtrer sur le schéma d'entrée si disponible
+        # Cas pyfunc MLflow
         try:
             input_schema = model.metadata.get_input_schema()
             expected_cols = [c.name for c in input_schema.inputs] if input_schema else None
         except Exception:
             expected_cols = None
 
-        X_input = X[expected_cols] if expected_cols else X
+        X_input = X[expected_cols].copy() if expected_cols else X.copy()
+        X_input = X_input.fillna(0)
         preds = model.predict(X_input)
         return np.asarray(preds).ravel()
 
@@ -98,13 +105,18 @@ def _select_tickers(month_data: pd.DataFrame, proba_min: float = PROBA_MIN, max_
     if "proba_upside" not in month_data.columns:
         return []
 
+    # Logique DYNAMIQUE : On ne garde QUE ce qui dépasse strictement le seuil de conviction
     selected = month_data[month_data["proba_upside"] >= proba_min]
 
     if selected.empty:
-        logger.info("Alerte Marché : Aucun signal au-dessus du seuil. Passage en 100% Cash.")
+        logger.info(f"Alerte Marché : Aucun signal au-dessus du seuil de {proba_min}. Passage en 100% Cash.")
         return []
 
-    return selected.nlargest(max_stocks, "proba_upside").index.tolist()
+    # On trie par ordre de conviction décroissante
+    selected = selected.sort_values(by="proba_upside", ascending=False)
+    
+    # max_stocks agit comme une limite de sécurité
+    return selected.head(max_stocks).index.tolist()
 
 
 def _compute_turnover(new_alloc: Dict[str, float], old_alloc: Dict[str, float]) -> float:
@@ -236,6 +248,8 @@ def backtest_strategy_with_rebalancing(
     max_stocks: int = MAX_STOCKS_SELECT,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, float]]:
     logger.info(f"Starting backtest | Benchmark: {benchmark_ticker}")
+    logger.info("Calcul des features techniques pour le backtest...")
+    df_monthly_feat = add_all_features(df_monthly.copy())
 
     daily_prices = df_daily["adj close"].unstack().ffill()
     daily_returns = daily_prices.pct_change().fillna(0)
@@ -250,11 +264,12 @@ def backtest_strategy_with_rebalancing(
     all_records = []
     rebalance_log = []
     drifted_allocation: Dict[str, float] = {}
-    monthly_dates = df_monthly.index.get_level_values("date").unique().sort_values()
+    monthly_dates = df_monthly_feat.index.get_level_values("date").unique().sort_values()
 
     for i, month_date in enumerate(monthly_dates[:-1]):
+        # Utiliser df_monthly_feat
         month_data = _generate_monthly_signals(
-            df_monthly.xs(month_date, level="date").copy(),
+            df_monthly_feat.xs(month_date, level="date").copy(),
             model,
         )
 
@@ -420,4 +435,3 @@ def generate_live_signals(
     )
 
     return df_signals, rebalance_history
-    
