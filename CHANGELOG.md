@@ -1,3 +1,5 @@
+## [1.8.6](https://github.com/SORADATA/quantitative-alpha-edge-cac40/compare/v1.8.5...v1.8.6) (2026-07-06)
+
 ## [1.8.5](https://github.com/SORADATA/quantitative-alpha-edge-cac40/compare/v1.8.4...v1.8.5) (2026-07-03)
 
 ## [1.8.4](https://github.com/SORADATA/quantitative-alpha-edge-cac40/compare/v1.8.3...v1.8.4) (2026-07-03)
