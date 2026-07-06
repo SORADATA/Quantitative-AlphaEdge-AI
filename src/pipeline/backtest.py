@@ -54,28 +54,32 @@ def get_optimal_weights(prices_df: pd.DataFrame, risk_free_rate: float = RISK_FR
 def _score_with_model(model: Any, X: pd.DataFrame) -> np.ndarray:
     """
     Point d'entrée unique pour scorer un DataFrame.
-    Filtre les features exactes et gère les NaNs pour éviter les crashs du modèle en production.
+    Filtre les features exactes, gère les colonnes manquantes (ex: Fama-French lags)
+    et impute les NaNs pour éviter les crashs en production.
     """
     if hasattr(model, "predict_proba"):
-        # Sécurité 1 : Ne garder que les features d'entraînement si le modèle les expose
         if hasattr(model, "features_"):
-            X_input = X[model.features_].copy()
+            # Remplacement de X[features] par reindex() pour éviter le KeyError
+            X_input = X.reindex(columns=model.features_).copy()
         else:
             X_input = X.copy()
             
-        # Sécurité 2 : Imputer les NaNs
         X_input = X_input.fillna(0)
         return model.predict_proba(X_input)[:, 1]
 
     if hasattr(model, "predict"):
-        # Cas pyfunc MLflow
         try:
             input_schema = model.metadata.get_input_schema()
             expected_cols = [c.name for c in input_schema.inputs] if input_schema else None
         except Exception:
             expected_cols = None
 
-        X_input = X[expected_cols].copy() if expected_cols else X.copy()
+        if expected_cols:
+            # Utiliser reindex au lieu du filtrage strict
+            X_input = X.reindex(columns=expected_cols).copy()
+        else:
+            X_input = X.copy()
+            
         X_input = X_input.fillna(0)
         preds = model.predict(X_input)
         return np.asarray(preds).ravel()
@@ -248,6 +252,8 @@ def backtest_strategy_with_rebalancing(
     max_stocks: int = MAX_STOCKS_SELECT,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, float]]:
     logger.info(f"Starting backtest | Benchmark: {benchmark_ticker}")
+
+    # Appliquer le feature engineering sur les données mensuelles AVANT la boucle
     logger.info("Calcul des features techniques pour le backtest...")
     df_monthly_feat = add_all_features(df_monthly.copy())
 
@@ -264,6 +270,8 @@ def backtest_strategy_with_rebalancing(
     all_records = []
     rebalance_log = []
     drifted_allocation: Dict[str, float] = {}
+    
+    # Utiliser le dataframe avec features pour extraire les dates
     monthly_dates = df_monthly_feat.index.get_level_values("date").unique().sort_values()
 
     for i, month_date in enumerate(monthly_dates[:-1]):
