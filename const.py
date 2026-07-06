@@ -18,7 +18,7 @@ RISK_FREE_RATE:    float = 0.03
 
 TARGET_CLUSTER:  int = 3
 PROBA_THRESHOLD: float = 0.51
-PROBA_MIN:       float = 0.51
+PROBA_MIN:       float = 0.50
 
 FEATURE_COLS: list[str] = [
     "rsi_lag1", "macd_lag1", "bb_low_lag1", "bb_mid_lag1",
