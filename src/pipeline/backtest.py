@@ -228,7 +228,11 @@ def generate_live_signals(df_daily, daily_prices, model, rebalance_history, prob
         rebalance_history = pd.concat([rebalance_history, new_row]).sort_index()
 
     out = snapshot_scored.reset_index().rename(columns={"ticker": "Ticker"})
-    out["Allocation"] = out["Ticker"].map(allocation).fillna(0.0)
+    
+    # NORMALISATION : on retire le suffixe du ticker du DF pour correspondre aux clés du dictionnaire[cite: 1]
+    out["Ticker_Short"] = out["Ticker"].apply(lambda x: x.split('.')[0])
+    out["Allocation"] = out["Ticker_Short"].map(allocation).fillna(0.0)
+    
     out["Signal"] = np.where(out["Allocation"] > 0, "BUY", "NEUTRAL")
     out["Proba_Hausse"] = (out["proba_upside"] * 100).round(1)
     
