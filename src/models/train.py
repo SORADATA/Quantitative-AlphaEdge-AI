@@ -228,7 +228,9 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
                     "Max_Drawdown": fin_metrics["max_drawdown"],
                     "Total_Return": fin_metrics["total_return"],
                     "WF_AUC_mean":  wf_results["auc"].mean() if not wf_results.empty else 0.0,
+                    "primary_metric": final_auc
                 })
+                
                 mlflow.log_dict(model_card, "model_card.json")
 
                 # --- Création de l'instance PyFunc et de la Signature ---
