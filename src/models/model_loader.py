@@ -1,68 +1,81 @@
 import os
 import pickle
-import mlflow
-import mlflow.sklearn
-from mlflow.tracking import MlflowClient
 from pathlib import Path
+from typing import Any
+
+import mlflow
+from mlflow.tracking import MlflowClient
+from mlflow.exceptions import MlflowException
+from dotenv import load_dotenv
 
 from const import MODEL_DIR
 from src.utils.logger import setup_logger
 
+load_dotenv()
 logger = setup_logger("model_loader")
 
+HF_TOKEN = os.getenv("HF_TOKEN")
+USE_MLFLOW = bool(HF_TOKEN)
 
-def load_champion(market_name: str):
+if USE_MLFLOW:
+    os.environ["MLFLOW_TRACKING_USERNAME"] = "SORADATA"
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = HF_TOKEN
+    mlflow.set_tracking_uri("https://soradata-alphaedge-registry.hf.space")
+
+
+def _load_champion_from_mlflow(market_name: str) -> Any | None:
     """
-    Charge le modèle champion depuis MLflow registry pour un marché donné.
-    Fallback 1 : dernière version enregistrée si l'alias 'champion' est absent.
-    Fallback 2 : .pkl local si MLflow est totalement indisponible.
-
-    Args:
-        market_name: Nom du marché tel que défini dans config/markets/*.json
-                     (ex: "CAC40", "NASDAQ", "SP500")
+    Charge le modèle aliasé 'champion' depuis le MLflow Model Registry.
+    Retourne None en cas d'échec (fallback local ensuite).
     """
-    hf_token = os.getenv("HF_TOKEN")
-    registered_name = f"AlphaEdge_Ensemble_{market_name}"
+    registered_model_name = f"AlphaEdge_Ensemble_{market_name}"
+    try:
+        model_uri = f"models:/{registered_model_name}@champion"
+        model = mlflow.pyfunc.load_model(model_uri)
+        logger.info(f"[{market_name}] Champion chargé depuis MLflow : {model_uri}")
+        return model
+    except MlflowException as e:
+        logger.warning(f"[{market_name}] Impossible de charger le champion MLflow : {e}")
+        return None
 
-    if hf_token:
-        os.environ["MLFLOW_TRACKING_USERNAME"] = "SORADATA"
-        os.environ["MLFLOW_TRACKING_PASSWORD"] = hf_token
-        mlflow.set_tracking_uri("https://soradata-alphaedge-registry.hf.space")
 
-        # Tentative 1 : alias champion
-        try:
-            model_uri = f"models:/{registered_name}@champion"
-            model = mlflow.sklearn.load_model(model_uri)
-            logger.info(f"[{market_name}] Champion chargé depuis MLflow : {model_uri}")
-            return model
-        except Exception as e:
-            logger.warning(f"[{market_name}] Alias 'champion' introuvable ({e}), tentative sur dernière version...")
+def _load_champion_from_local(market_name: str) -> Any | None:
+    """
+    Fallback : charge le dernier modèle sauvegardé localement (pickle).
+    Utilisé si MLflow est indisponible ou HF_TOKEN absent.
+    """
+    local_path = MODEL_DIR / market_name / "ensemble_model.pkl"
+    if not local_path.exists():
+        logger.error(f"[{market_name}] Aucun modèle local trouvé à {local_path}")
+        return None
+    try:
+        with open(local_path, "rb") as f:
+            model = pickle.load(f)
+        logger.info(f"[{market_name}] Modèle chargé depuis le fallback local : {local_path}")
+        return model
+    except Exception as e:
+        logger.error(f"[{market_name}] Échec du chargement local : {e}")
+        return None
 
-        # Tentative 2 : dernière version enregistrée
-        try:
-            client = MlflowClient()
-            versions = client.get_latest_versions(registered_name)
-            if versions:
-                latest = sorted(versions, key=lambda v: int(v.version))[-1]
-                model_uri = f"models:/{registered_name}/{latest.version}"
-                model = mlflow.sklearn.load_model(model_uri)
-                logger.warning(
-                    f"[{market_name}] Pas de champion — version {latest.version} chargée : {model_uri}"
-                    )
-                return model
-            else:
-                logger.warning(f"[{market_name}] Aucune version enregistrée pour {registered_name}.")
-        except Exception as e:
-            logger.warning(f"[{market_name}] MLflow indisponible ({e}), fallback disque local.")
 
-    # Fallback final : .pkl local par marché
-    pkl_path = MODEL_DIR / market_name / "ensemble_model.pkl"
-    if not pkl_path.exists():
-        raise FileNotFoundError(
-            f"[{market_name}] Aucun modèle disponible — MLflow inaccessible et pas de .pkl local à {pkl_path}"
+def load_champion(market_name: str) -> Any:
+    """
+    Point d'entrée unique utilisé par run_pipeline.py (daily run).
+    Priorité : champion MLflow -> fallback local.
+    Lève une exception si aucun modèle n'est disponible (le pipeline
+    ne doit jamais tourner sans modèle).
+    """
+    model = None
+    if USE_MLFLOW:
+        model = _load_champion_from_mlflow(market_name)
+
+    if model is None:
+        model = _load_champion_from_local(market_name)
+
+    if model is None:
+        raise RuntimeError(
+            f"[{market_name}] Aucun modèle champion disponible "
+            "(ni MLflow, ni local). Impossible de générer les signaux."
         )
 
-    with open(pkl_path, "rb") as f:
-        model = pickle.load(f)
-    logger.info(f"[{market_name}] Champion chargé depuis disque : {pkl_path}")
     return model

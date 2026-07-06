@@ -12,6 +12,10 @@ from streamlit_autorefresh import st_autorefresh
 import time
 import os
 
+import mlflow
+from mlflow.tracking import MlflowClient
+from mlflow.exceptions import MlflowException
+
 
 # =============================================================================
 # 1. CONFIGURATION & STYLE
@@ -25,8 +29,23 @@ st.set_page_config(
 st_autorefresh(interval=900000, key="datarefresh")
 
 BASE_DIR = Path(__file__).resolve().parent
-CONFIG_DIR = BASE_DIR / "config"
 HF_REPO_ID = os.getenv("HF_REPO_ID", "soradata/alphaedge-data")
+
+# --- MLflow : mêmes réglages que train.py ---
+MLFLOW_TRACKING_URI = "https://soradata-alphaedge-registry.hf.space"
+HF_TOKEN = os.getenv("HF_TOKEN")
+MLFLOW_ENABLED = bool(HF_TOKEN)
+
+if MLFLOW_ENABLED:
+    os.environ["MLFLOW_TRACKING_USERNAME"] = "SORADATA"
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = HF_TOKEN
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
+# Où train.py écrit les model_card.json locaux (MODEL_DIR/{market}/model_card.json).
+# Ajuste ce chemin si ton const.MODEL_DIR pointe ailleurs sur ce déploiement.
+MODEL_DIR = BASE_DIR / "models"
+
+MARKET_OPTIONS = ["CAC40", "BRVM"]
 
 st.markdown("""
 <style>
@@ -60,17 +79,27 @@ st.markdown("""
         font-size: 14px;
         text-transform: uppercase;
     }
+    .mlflow-badge {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+    .badge-champion { background-color: rgba(0, 204, 150, 0.15); color: #00CC96; }
+    .badge-fallback { background-color: rgba(255, 193, 7, 0.15); color: #FFC107; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # =============================================================================
-# 2. CHARGEMENT DES DONNÉES DEPUIS HUGGING FACE
+# 2. CHARGEMENT DES DONNÉES DEPUIS HUGGING FACE (par marché)
 # =============================================================================
 
 @st.cache_data(ttl=600, show_spinner=False)
-def load_all_data():
-    base_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/data"
+def load_all_data(market: str):
+    base_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/data/{market}"
     df_hist = pd.DataFrame()
     df_signals = pd.DataFrame()
     df_rebalance = pd.DataFrame()
@@ -108,12 +137,8 @@ def load_all_data():
     return df_hist, df_signals, df_rebalance, errors
 
 
-with st.spinner("Loading data from Hugging Face..."):
-    df_hist, df_signals, df_rebalance, load_errors = load_all_data()
-
-
 # =============================================================================
-# 3. FONCTIONS UTILITAIRES
+# 3. FONCTIONS UTILITAIRES — KPIs / MARCHÉ
 # =============================================================================
 
 def display_kpi_card(label, value, is_percent=True, color_code=False, prefix="", minimal=False):
@@ -192,11 +217,77 @@ def get_live_ticker_data(ticker, period="1y"):
 
 
 # =============================================================================
+# 3bis. FONCTIONS UTILITAIRES — MLFLOW (aligné sur train.py : alias "champion")
+# =============================================================================
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_champion_metrics(market: str):
+    """
+    Récupère les métriques du modèle 'champion' pour un marché donné.
+    1) Essaie MLflow via l'alias 'champion' (cohérent avec train.py qui utilise
+       client.set_registered_model_alias(name, "champion", version)).
+    2) Si MLflow est indisponible ou qu'aucun alias 'champion' n'existe encore
+       (seuils Sharpe/MaxDD non atteints lors du dernier entraînement), on
+       retombe sur le model_card.json sauvegardé localement par train.py.
+    """
+    result = {
+        "source": None,      # "mlflow" | "local" | None
+        "metrics": {},
+        "version": None,
+        "run_id": None,
+        "promoted": None,
+        "error": None,
+    }
+    registered_model_name = f"AlphaEdge_Ensemble_{market}"
+
+    if MLFLOW_ENABLED:
+        try:
+            client = MlflowClient()
+            mv = client.get_model_version_by_alias(registered_model_name, "champion")
+            run = client.get_run(mv.run_id)
+            result["source"] = "mlflow"
+            result["metrics"] = run.data.metrics
+            result["version"] = mv.version
+            result["run_id"] = mv.run_id
+            result["promoted"] = True
+            return result
+        except MlflowException as e:
+            result["error"] = f"MLflow: {e}"
+        except Exception as e:
+            result["error"] = f"MLflow: {e}"
+
+    # --- Fallback local : model_card.json écrit par train.py ---
+    card_path = MODEL_DIR / market / "model_card.json"
+    if card_path.exists():
+        try:
+            with open(card_path, "r") as f:
+                card = json.load(f)
+            result["source"] = "local"
+            metrics = {}
+            for k, v in card.get("metrics_ml", {}).items():
+                metrics[f"ml_{k}"] = v
+            for k, v in card.get("metrics_fin", {}).items():
+                metrics[f"fin_{k}"] = v
+            result["metrics"] = metrics
+            result["promoted"] = card.get("mlflow", {}).get("promoted", False)
+            result["run_id"] = card.get("mlflow", {}).get("run_id")
+        except Exception as e:
+            result["error"] = (result["error"] + " | " if result["error"] else "") + f"model_card.json: {e}"
+
+    return result
+
+
+# =============================================================================
 # 4. SIDEBAR
 # =============================================================================
 
 st.sidebar.title("AlphaEdge")
 st.sidebar.caption("Quantitative Asset Allocation")
+
+selected_market = st.sidebar.selectbox("🌍 Marché", MARKET_OPTIONS, index=0)
+
+with st.spinner(f"Loading {selected_market} data..."):
+    df_hist, df_signals, df_rebalance, load_errors = load_all_data(selected_market)
 
 if st.sidebar.button("🔄 Force Sync Pipeline"):
     st.cache_data.clear()
@@ -227,7 +318,9 @@ else:
 
 st.sidebar.markdown("---")
 
-ticker_val_path = BASE_DIR / 'ticker_validation.json'
+ticker_val_path = BASE_DIR / "config" / selected_market / "ticker_validation.json"
+if not ticker_val_path.exists():
+    ticker_val_path = BASE_DIR / "ticker_validation.json"  # fallback ancien chemin unique
 if ticker_val_path.exists():
     with st.sidebar.expander("🔍 Ticker Health", expanded=False):
         try:
@@ -251,6 +344,9 @@ if load_errors:
         for err in load_errors:
             st.warning(err, icon="⚠️")
 
+if not MLFLOW_ENABLED:
+    st.sidebar.caption("ℹ️ HF_TOKEN absent : métriques modèle en mode local uniquement.")
+
 st.sidebar.caption("⚠️ **Disclaimer:** Not financial advice.")
 
 
@@ -259,7 +355,7 @@ st.sidebar.caption("⚠️ **Disclaimer:** Not financial advice.")
 # =============================================================================
 
 if page == "Dashboard":
-    st.title("Portfolio Overview")
+    st.title(f"Portfolio Overview — {selected_market}")
     if not df_hist.empty:
         tot_ret, alpha, sharpe, max_dd = calculate_metrics(df_hist)
         c1, c2, c3, c4 = st.columns(4)
@@ -361,7 +457,7 @@ if page == "Dashboard":
             else:
                 st.info("⏳ Waiting for signals...")
     else:
-        st.warning("⚠️ No data available from Hugging Face.")
+        st.warning(f"⚠️ No data available for {selected_market} from Hugging Face.")
 
 
 # =============================================================================
@@ -369,7 +465,7 @@ if page == "Dashboard":
 # =============================================================================
 
 elif page == "Daily Signals":
-    st.title("📡 Daily Trading Signals")
+    st.title(f"📡 Daily Trading Signals — {selected_market}")
     if not df_signals.empty:
         d = df_signals.copy()
         if 'Allocation' in d.columns:
@@ -399,7 +495,7 @@ elif page == "Daily Signals":
             alloc_total = df_signals['Allocation'].sum() if 'Allocation' in df_signals.columns else 0
             st.metric("Total Allocated", f"{alloc_total:.1%}")
     else:
-        st.info("⏳ No signals available.")
+        st.info(f"⏳ No signals available for {selected_market}.")
 
 
 # =============================================================================
@@ -450,39 +546,53 @@ elif page == "Data Explorer":
 
 
 # =============================================================================
-# PAGE 4 : MODEL DETAILS
+# PAGE 4 : MODEL DETAILS (MLflow — alias "champion", fallback model_card.json)
 # =============================================================================
 
 elif page == "Model Details":
-    st.title("⚙️ Model Configuration")
+    st.title(f"⚙️ Model Configuration — {selected_market}")
     tab1, tab2 = st.tabs(["📊 Performance", "🌐 Clusters"])
+
     with tab1:
         st.markdown("""
         ### Hybrid Strategy Components
-        **1. XGBoost**: Predicts 1-month upside probability
+        **1. XGBoost + LightGBM + Ridge → LogisticRegression**: Predicts 1-month upside probability
         **2. K-Means**: Market regime detection (RSI-based)
         **3. Markowitz**: Portfolio optimization (Max Sharpe)
         """)
         st.markdown("---")
-        metrics_path = BASE_DIR / "src" / "models" / "metrics.json"
-        if metrics_path.exists():
-            try:
-                with open(metrics_path, "r") as f:
-                    metrics = json.load(f)
-                st.markdown("### Model Performance (Test Set)")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Accuracy", f"{metrics.get('accuracy', 0):.2%}")
-                with col2:
-                    st.metric("Precision", f"{metrics.get('precision', 0):.2%}")
-                with col3:
-                    st.metric("Recall", f"{metrics.get('recall', 0):.2%}")
-                with col4:
-                    st.metric("ROC AUC", f"{metrics.get('auc_score', 0):.4f}")
-            except Exception:
-                st.info("⏳ Metrics unreadable.")
+
+        champ = get_champion_metrics(selected_market)
+
+        if champ["source"] == "mlflow":
+            st.markdown(
+                '<span class="mlflow-badge badge-champion">✅ MLflow — Champion v'
+                f'{champ["version"]}</span>', unsafe_allow_html=True
+            )
+        elif champ["source"] == "local":
+            status = "promu champion" if champ.get("promoted") else "dernier run (non promu — seuils non atteints)"
+            st.markdown(
+                f'<span class="mlflow-badge badge-fallback">📁 Fallback local — {status}</span>',
+                unsafe_allow_html=True
+            )
         else:
-            st.info("⏳ Metrics not available. Train model first.")
+            st.info("⏳ Aucune métrique disponible pour ce marché (ni MLflow, ni model_card.json local).")
+
+        if champ["metrics"]:
+            st.markdown("### Model Performance")
+            metric_items = list(champ["metrics"].items())
+            cols = st.columns(4)
+            for i, (name, val) in enumerate(metric_items):
+                try:
+                    formatted = f"{val:.4f}"
+                except (TypeError, ValueError):
+                    formatted = str(val)
+                cols[i % 4].metric(name.replace("_", " ").title(), formatted)
+
+        if champ["error"]:
+            with st.expander("Détails techniques (debug)"):
+                st.caption(champ["error"])
+
     with tab2:
         st.subheader("🌐 Cluster Analysis")
         st.markdown("Segmentation based on RSI to identify momentum vs reversal regimes.")
@@ -503,7 +613,7 @@ elif page == "Model Details":
 # =============================================================================
 
 elif page == "Rebalance History":
-    st.title("Monthly Rebalancing History")
+    st.title(f"Monthly Rebalancing History — {selected_market}")
     if not df_rebalance.empty:
         st.markdown("""
         This page shows the **monthly rebalancing decisions** made by the strategy.
@@ -532,7 +642,7 @@ elif page == "Rebalance History":
         st.subheader("Detailed Rebalancing Log")
         st.dataframe(df_rebalance, use_container_width=True, height=400)
     else:
-        st.info("⏳ No rebalance history available.")
+        st.info(f"⏳ No rebalance history available for {selected_market}.")
 
 
 # =============================================================================
