@@ -304,15 +304,14 @@ st.sidebar.markdown("---")
 if not df_hist.empty:
     last_dt = df_hist.index[-1]
     days_old = (datetime.now() - last_dt).days
-    
-    # MODIFICATION ICI : Considérer les données de la veille comme "System Online" (Stratégie D-1)
+
+    # Considérer les données de la veille comme "System Online" (Stratégie D-1)
     if days_old <= 1:
         status_icon, status_text = "🟢", "● System Online"
     elif days_old <= 3:
         status_icon, status_text = "🟡", "○ Data Slightly Old"
     else:
         status_icon, status_text = "🔴", "○ Data Outdated"
-        
     st.sidebar.info(f"Last Update: {last_dt.date()}")
     st.sidebar.markdown(f"{status_icon} {status_text}")
 else:
@@ -322,7 +321,7 @@ st.sidebar.markdown("---")
 
 ticker_val_path = BASE_DIR / "config" / selected_market / "ticker_validation.json"
 if not ticker_val_path.exists():
-    ticker_val_path = BASE_DIR / "ticker_validation.json"  # fallback ancien chemin unique
+    ticker_val_path = BASE_DIR / "ticker_validation.json"
 if ticker_val_path.exists():
     with st.sidebar.expander("🔍 Ticker Health", expanded=False):
         try:
