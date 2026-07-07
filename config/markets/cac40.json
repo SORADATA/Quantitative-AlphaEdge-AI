@@ -1,5 +1,6 @@
 {
     "market_name": "CAC40",
+    "benchmark_ticker": "^FCHI",
     "tickers": [
         "AI.PA", "AIR.PA", "ALO.PA", "MT.AS", "ATO.PA", "CS.PA", "BNP.PA",
         "EN.PA", "CAP.PA", "CA.PA", "DSY.PA", "EL.PA", "ENGI.PA", "ERF.PA",
