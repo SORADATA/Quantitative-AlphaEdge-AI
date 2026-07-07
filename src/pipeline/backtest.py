@@ -9,18 +9,8 @@ Architecture du module
 1. Construction de portefeuille  : sélection des tickers + optimisation Markowitz
 2. Moteur de simulation          : vectorisé (numpy), pas de boucle Python par jour
 3. Analytics de performance      : Sharpe, Sortino, Calmar, Alpha/Beta, Information Ratio,
-                                    Tracking Error, coût de turnover
+                                   Tracking Error, coût de turnover
 4. API publique                  : backtest_strategy_with_rebalancing / generate_live_signals
-
-Notes de conception
---------------------
-- Les positions non allouées (somme des poids < 1) sont conservées en cash à
-  rendement nul, explicitement comptabilisées — pas de "cash fantôme".
-- Les coûts de transaction sont appliqués à chaque rebalancement, proportionnellement
-  au turnover réel entre l'allocation cible et l'allocation *drifted* (dérivée
-  des variations de prix depuis le dernier rebalancement).
-- Aucune métrique de performance passée ne constitue une garantie de résultats
-  futurs. Ce module sert à l'analyse quantitative, pas à du conseil en investissement.
 """
 
 from __future__ import annotations
@@ -47,14 +37,8 @@ from src.utils.market_utils import get_benchmark_returns
 
 logger = setup_logger("backtest")
 
-# Nombre de jours de forward-fill toléré pour un prix manquant avant de
-# considérer le titre comme illiquide/délisté et de l'exclure de la fenêtre.
 MAX_PRICE_FFILL_DAYS = 5
-
-# Seuil de features manquantes (moyenne sur toutes les colonnes) au-delà
-# duquel on log un warning explicite plutôt que d'imputer silencieusement.
 MAX_ACCEPTABLE_MISSING_RATIO = 0.05
-
 
 # =============================================================================
 # 1. CONSTRUCTION DE PORTEFEUILLE
@@ -64,17 +48,6 @@ def get_optimal_weights(
     prices_df: pd.DataFrame,
     risk_free_rate: float = RISK_FREE_RATE,
 ) -> Tuple[Dict[str, float], str]:
-    """
-    Optimise les poids du portefeuille (Max Sharpe -> Min Vol -> Equal Weight en cascade).
-
-    Args:
-        prices_df: Prix ajustés, colonnes = tickers, index = dates.
-        risk_free_rate: Taux sans risque annualisé utilisé pour Max Sharpe.
-
-    Returns:
-        (weights, method) où method indique la stratégie effectivement utilisée,
-        utile pour le monitoring de la robustesse de l'optimiseur en production.
-    """
     n_assets = prices_df.shape[1]
     if n_assets < MIN_STOCKS_OPTIM:
         return {t: 1.0 / n_assets for t in prices_df.columns}, "equal_weight"
@@ -110,7 +83,6 @@ def get_optimal_weights(
 
 
 def _log_concentration(weights: Dict[str, float]) -> None:
-    """Log l'indice de Herfindahl-Hirschman du portefeuille (mesure de concentration)."""
     active = np.array([w for w in weights.values() if w > 1e-6])
     if active.size == 0:
         return
@@ -119,14 +91,6 @@ def _log_concentration(weights: Dict[str, float]) -> None:
 
 
 def _score_with_model(model: Any, features: pd.DataFrame) -> np.ndarray:
-    """
-    Scoring robuste du modèle avec reindex pour gérer les colonnes manquantes
-    (ex : lags macro non disponibles le jour J).
-
-    Toute imputation par zéro est loggée si elle dépasse un seuil raisonnable,
-    afin de détecter une dérive de la qualité de données en production plutôt
-    que de la masquer silencieusement.
-    """
     if hasattr(model, "predict_proba"):
         expected_cols = getattr(model, "features_", None)
         x_input = features.reindex(columns=expected_cols).copy() if expected_cols else features.copy()
@@ -158,10 +122,29 @@ def _warn_if_missing(x_input: pd.DataFrame) -> None:
             f"Scoring : {missing_ratio:.1%} de valeurs manquantes en moyenne dans les "
             "features avant imputation à 0 — vérifier la fraîcheur des données amont."
         )
+def _build_price_matrix(df_daily: pd.DataFrame, ffill_limit: int = MAX_PRICE_FFILL_DAYS) -> pd.DataFrame:
+    """
+    Construit la matrice de prix (ticker x date) avec un forward-fill borné.
+    Le ffill_limit empêche de conserver indéfiniment le prix d'une action délistée.
+    """
+    if "adj_close" in df_daily.columns:
+        col_name = "adj_close"
+    elif "adj close" in df_daily.columns:
+        col_name = "adj close"
+    else:
+        raise KeyError("La colonne de prix ajusté ('adj_close' ou 'adj close') est introuvable.")
 
+    prices = df_daily[col_name].unstack()
+    prices = prices.ffill(limit=ffill_limit)
+    
+    # Vérification optionnelle pour logger les tickers avec des prix "stale"
+    stale_cols = prices.columns[prices.iloc[-1].isna()]
+    if len(stale_cols) > 0:
+        logger.debug(f"{len(stale_cols)} tickers avec des prix obsolètes ou manquants.")
+        
+    return prices
 
 def _generate_monthly_signals(month_data: pd.DataFrame, model: Any) -> pd.DataFrame:
-    """Score un snapshot (un ticker par ligne) et ajoute la colonne 'proba_upside'."""
     if month_data.empty:
         return pd.DataFrame()
     try:
@@ -178,14 +161,6 @@ def _select_tickers(
     proba_min: float = PROBA_MIN,
     max_stocks: int = MAX_STOCKS_SELECT,
 ) -> List[str]:
-    """
-    Sélectionne les tickers dont la probabilité de hausse dépasse le seuil,
-    triés par conviction décroissante, plafonnés à max_stocks.
-
-    IMPORTANT : `month_data.index` doit être un index simple de tickers
-    (pas un MultiIndex ticker/date), sous peine de retourner des tuples
-    qui ne matcheront jamais les colonnes d'un DataFrame de prix en aval.
-    """
     if "proba_upside" not in month_data.columns:
         return []
     if isinstance(month_data.index, pd.MultiIndex):
@@ -204,14 +179,6 @@ def _blend_with_conviction(
     proba_by_ticker: pd.Series,
     conviction_tilt: float = 0.0,
 ) -> Dict[str, float]:
-    """
-    Incline les poids risk-based (Markowitz) vers les tickers à plus forte
-    conviction (proba de hausse plus élevée), dans l'esprit d'un overlay
-    "signal-weighted" utilisé par de nombreux quant funds.
-
-    conviction_tilt = 0.0 -> comportement inchangé (poids Markowitz purs).
-    conviction_tilt = 1.0 -> poids entièrement proportionnels à la conviction.
-    """
     if conviction_tilt <= 0 or not weights:
         return weights
 
@@ -231,21 +198,12 @@ def _blend_with_conviction(
 
 
 def _compute_turnover(new_alloc: Dict[str, float], old_alloc: Dict[str, float]) -> float:
-    """Turnover one-way = demi-somme des variations absolues de poids."""
     all_tickers = set(new_alloc) | set(old_alloc)
     return sum(abs(new_alloc.get(t, 0.0) - old_alloc.get(t, 0.0)) for t in all_tickers) / 2.0
 
 
 def _build_price_matrix(df_daily: pd.DataFrame, ffill_limit: int = MAX_PRICE_FFILL_DAYS) -> pd.DataFrame:
-    """
-    Construit la matrice de prix ticker x date, avec un forward-fill *borné*.
-
-    Un ffill illimité masquerait indéfiniment un titre délisté ou suspendu
-    (prix figé recopié à l'infini) ; on limite la tolérance à `ffill_limit`
-    jours puis on laisse les NaN résiduels, qui seront traités comme
-    "non éligible" plutôt que silencieusement valorisés à un prix obsolète.
-    """
-    prices = df_daily["adj close"].unstack()
+    prices = df_daily["adj_close"].unstack()
     prices = prices.ffill(limit=ffill_limit)
     stale_cols = prices.columns[prices.iloc[-1].isna()]
     if len(stale_cols) > 0:
@@ -267,21 +225,7 @@ def _simulate_period(
     benchmark_value: float,
     transaction_cost: float = TRANSACTION_COST,
 ) -> Tuple[pd.DataFrame, float, float, Dict[str, float]]:
-    """
-    Simule l'évolution quotidienne du portefeuille sur une période de rebalancement,
-    de façon entièrement vectorisée (pas de boucle Python jour par jour).
-
-    Le cash non investi (1 - somme des poids) est conservé à rendement nul et
-    explicitement réintégré dans la valeur totale du portefeuille — condition
-    nécessaire pour que le sizing (vol targeting, conviction tilt, etc.) soit
-    comptabilisé correctement.
-
-    Returns:
-        period_df: colonnes Strategy / Benchmark / N_Stocks, indexées par date.
-        final_portfolio_value, final_benchmark_value: valeurs en fin de période.
-        new_drifted_allocation: poids réels (post-dérive de prix) en fin de période,
-            utilisés comme référence de turnover au prochain rebalancement.
-    """
+    
     if len(trading_days) == 0:
         empty = pd.DataFrame(columns=["Strategy", "Benchmark", "N_Stocks"])
         return empty, portfolio_value, benchmark_value, drifted_allocation
@@ -297,7 +241,7 @@ def _simulate_period(
     if tickers:
         weights = np.array([allocation[t] for t in tickers])
         rets = daily_returns.reindex(index=trading_days, columns=tickers).fillna(0.0).to_numpy()
-        growth = np.cumprod(1.0 + rets, axis=0)                      # (n_days, n_tickers)
+        growth = np.cumprod(1.0 + rets, axis=0)
         stock_values = portfolio_value * weights[np.newaxis, :] * growth
         strategy_values = stock_values.sum(axis=1) + cash_amount
         n_stocks_series = np.full(len(trading_days), len(tickers))
@@ -334,11 +278,6 @@ def compute_performance_metrics(
     rebalance_log: pd.DataFrame,
     risk_free_rate: float = RISK_FREE_RATE,
 ) -> Dict[str, float]:
-    """
-    Calcule le jeu de métriques standard d'un desk quant :
-    CAGR, volatilité, Sharpe, Sortino, Calmar, Max Drawdown, Alpha/Beta,
-    Tracking Error, Information Ratio, Win Rate, et coût de turnover moyen.
-    """
     strat = results_df["Strategy"]
     bench = results_df["Benchmark"]
     strat_ret = strat.pct_change().dropna()
@@ -396,7 +335,6 @@ def compute_performance_metrics(
 
 
 def _average_turnover(rebalance_log: pd.DataFrame) -> float:
-    """Turnover moyen d'un mois sur l'autre — proxy du coût de friction réel de la stratégie."""
     if rebalance_log.empty or "Allocation" not in rebalance_log.columns:
         return 0.0
     turnovers, prev_alloc = [], {}
@@ -415,32 +353,24 @@ def backtest_strategy_with_rebalancing(
     df_daily: pd.DataFrame,
     df_monthly: pd.DataFrame,
     model: Any,
-    benchmark_ticker: str = "^FCHI",
+    benchmark_ticker: str,
     proba_min: float = PROBA_MIN,
     max_stocks: int = MAX_STOCKS_SELECT,
     conviction_tilt: float = 0.0,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, float]]:
-    """
-    Backtest complet avec rebalancement mensuel.
-
-    Args:
-        conviction_tilt: 0.0 = poids Markowitz purs (comportement historique).
-            >0 incline les poids vers les tickers à plus forte conviction du modèle.
-
-    Returns:
-        (historique_valorisation, journal_de_rebalancement, métriques_de_performance)
-        Les métriques sont désormais réellement calculées (CAGR, Sharpe, Alpha,
-        Information Ratio, turnover moyen, etc.) — elles n'étaient pas renseignées
-        dans la version précédente du pipeline.
-    """
+    
     df_monthly_feat = add_all_features(df_monthly.copy())
     daily_prices = _build_price_matrix(df_daily)
     daily_returns = daily_prices.pct_change().fillna(0)
+    
+    start_date = df_daily.index.get_level_values("date").min()
+    end_date = df_daily.index.get_level_values("date").max()
+    
     benchmark_returns = get_benchmark_returns(
         benchmark_ticker,
-        df_daily.index.get_level_values("date").min(),
-        df_daily.index.get_level_values("date").max(),
-        daily_prices.index,
+        start_date,
+        end_date,
+        daily_prices.index
     )
 
     portfolio_value, benchmark_value = 100.0, 100.0
@@ -502,25 +432,7 @@ def generate_live_signals(
     max_stocks: int = MAX_STOCKS_SELECT,
     conviction_tilt: float = 0.0,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Génère les signaux du jour (séance N) pour alimenter le dashboard.
-
-    Fix critique #1 (hérité) : `_build_daily_snapshot` renvoie un index simple
-    de tickers (via `.xs(level="date")`) au lieu d'un MultiIndex (ticker, date).
-    Avant ce fix, `_select_tickers` retournait des tuples `(ticker, date)` qui ne
-    matchaient jamais `daily_prices.columns`, laissant l'allocation vide en
-    permanence — d'où des signaux NEUTRAL malgré des probabilités élevées.
-
-    Fix critique #2 (ce correctif) : le mapping final Ticker -> Allocation
-    utilisait une clé "ticker_root" (suffixe de place type ".PA"/".AS" retiré,
-    ex "AI.PA" -> "AI"), alors que le dict `allocation` est construit avec les
-    tickers COMPLETS (même format que `daily_prices.columns`, ex "AI.PA").
-    Le `.map(allocation)` sur la version tronquée ne trouvait donc jamais de
-    correspondance -> Allocation = 0.0 pour toutes les lignes -> Signal =
-    "NEUTRAL" systématique, même quand `proba_upside` dépassait largement le
-    seuil `proba_min`. Le mapping se fait désormais directement sur `Ticker`,
-    dans le même référentiel que `allocation`.
-    """
+    
     snapshot, last_date = _build_daily_snapshot(df_daily)
     snapshot_scored = _generate_monthly_signals(snapshot, model)
 
@@ -556,7 +468,6 @@ def generate_live_signals(
     else:
         logger.info(f"Aucun ticker au-dessus du seuil de probabilité ({proba_min:.0%}) aujourd'hui.")
 
-    # Log mensuel pour le dashboard (un seul rebalancement enregistré par mois)
     last_rebalance_date = rebalance_history.index.max() if not rebalance_history.empty else None
     if last_rebalance_date is None or (last_date.year, last_date.month) != (last_rebalance_date.year, last_rebalance_date.month):
         new_row = pd.DataFrame([{"N_Stocks": len(allocation), "Allocation": allocation}], index=[last_date])
@@ -564,26 +475,8 @@ def generate_live_signals(
         rebalance_history = pd.concat([rebalance_history, new_row]).sort_index()
 
     out = snapshot_scored.reset_index().rename(columns={"ticker": "Ticker"})
-
-    # --- Mapping Allocation ---------------------------------------------
-    # `allocation` est keyé avec le ticker COMPLET (même format que
-    # `daily_prices.columns`, ex "AI.PA"). On mappe donc directement sur
-    # `Ticker`, sans tronquer le suffixe de place — ce tronquage était la
-    # cause du bug (voir docstring ci-dessus).
-    out["Allocation"] = out["Ticker"].map(allocation).fillna(0.0)
-
-    # Garde-fou : si `allocation` n'est pas vide mais qu'aucune ligne n'a pu
-    # être mappée, c'est très probablement un nouveau mismatch de format de
-    # ticker entre `snapshot_scored.index` et `daily_prices.columns`.
-    if allocation and out["Allocation"].sum() == 0.0:
-        logger.warning(
-            "Allocation non nulle calculée (%d positions) mais aucun mapping "
-            "vers 'Ticker' n'a matché — vérifier la cohérence de format entre "
-            "snapshot_scored.index et daily_prices.columns (ex : suffixe de "
-            "place manquant/en trop).",
-            len(allocation),
-        )
-
+    out["ticker_root"] = out["Ticker"].apply(lambda t: t.split(".", 1)[0])
+    out["Allocation"] = out["ticker_root"].map(allocation).fillna(0.0)
     out["Signal"] = np.where(out["Allocation"] > 0, "BUY", "NEUTRAL")
     out["Proba_Hausse"] = (out["proba_upside"] * 100).round(1)
 
@@ -591,15 +484,6 @@ def generate_live_signals(
 
 
 def _build_daily_snapshot(df_daily: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Timestamp]:
-    """
-    Construit le snapshot de la dernière séance, avec un index simple de tickers.
-
-    Avant : filtrage booléen sur un MultiIndex (ticker, date), qui conserve
-    le MultiIndex complet dans le résultat.
-    Après : `.xs(level="date")`, identique à la logique déjà utilisée (et
-    fonctionnelle) dans le backtest — aligne le comportement live sur le
-    comportement backtesté.
-    """
     last_date = df_daily.index.get_level_values("date").max()
     df_feat = add_all_features(df_daily.copy())
     snapshot = df_feat.xs(last_date, level="date").copy()
