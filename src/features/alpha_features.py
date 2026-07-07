@@ -13,34 +13,17 @@ from const import (
     FAMA_FRENCH_FACTORS,
 )
 from src.utils.feature_utils import compute_atr, compute_macd
+from src.utils.math_utils import _safe_div, _rolling_sortino, _rolling_maxdrawdown
 from src.utils.logger import setup_logger
+
 
 logger = setup_logger("alpha_features")
 
-# ══════════════════════════════════════════════════════════════════
-# 1. SOUS-FONCTIONS MATHÉMATIQUES (Utils)
-# ══════════════════════════════════════════════════════════════════
-
-def _safe_div(a: pd.Series, b: pd.Series) -> pd.Series:
-    return a.div(b.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
-
-def _rolling_sortino(returns: pd.Series, window: int = 6) -> pd.Series:
-    def _sortino_scalar(r: np.ndarray) -> float:
-        neg = r[r < 0]
-        if len(neg) == 0 or np.std(neg) == 0: return np.nan
-        return (np.mean(r) / np.std(neg)) * np.sqrt(12)
-    return returns.rolling(window, min_periods=window // 2).apply(_sortino_scalar, raw=True)
-
-def _rolling_maxdrawdown(returns: pd.Series, window: int = 12) -> pd.Series:
-    def _mdd(r: np.ndarray) -> float:
-        cumulative = np.cumprod(1 + r)
-        peak = np.maximum.accumulate(cumulative)
-        return ((cumulative - peak) / peak).min()
-    return returns.rolling(window, min_periods=window // 2).apply(_mdd, raw=True)
 
 # ══════════════════════════════════════════════════════════════════
-# 2. CALCULS DES FEATURES (Logique métier)
+# 1. CALCULS DES FEATURES (Logique métier)
 # ══════════════════════════════════════════════════════════════════
+
 
 def _add_momentum_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["return_1m"] = g["adj close"].transform(lambda x: x.pct_change(1))
@@ -54,6 +37,7 @@ def _add_momentum_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["mom_3_1"] = g["adj close"].transform(lambda x: x.pct_change(3))
     return df
 
+
 def _add_mean_reversion_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     ma12 = g["adj close"].transform(lambda x: x.rolling(12, min_periods=6).mean())
     std12 = g["adj close"].transform(lambda x: x.rolling(12, min_periods=6).std())
@@ -61,6 +45,7 @@ def _add_mean_reversion_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     high52 = g["adj close"].transform(lambda x: x.rolling(12, min_periods=6).max())
     df["nearness_52w_high"] = _safe_div(df["adj close"], high52)
     return df
+
 
 def _add_volatility_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["realized_vol_3m"] = g["return_1m"].transform(lambda x: x.rolling(3, min_periods=2).std() * np.sqrt(12))
@@ -70,12 +55,14 @@ def _add_volatility_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["idio_vol"] = excess.groupby(level=1).transform(lambda x: x.rolling(6, min_periods=3).std() * np.sqrt(12))
     return df
 
+
 def _add_risk_adjusted_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["sharpe_3m"] = _safe_div(g["return_1m"].transform(lambda x: x.rolling(3, min_periods=2).mean()), g["return_1m"].transform(lambda x: x.rolling(3, min_periods=2).std())) * np.sqrt(12)
     df["sharpe_6m"] = _safe_div(g["return_1m"].transform(lambda x: x.rolling(6, min_periods=3).mean()), g["return_1m"].transform(lambda x: x.rolling(6, min_periods=3).std())) * np.sqrt(12)
     df["sortino_6m"] = g["return_1m"].transform(lambda x: _rolling_sortino(x, window=6))
     df["calmar_proxy"] = _safe_div(g["return_1m"].transform(lambda x: x.rolling(12, min_periods=6).mean() * 12), g["return_1m"].transform(lambda x: _rolling_maxdrawdown(x, window=12)).abs())
     return df
+
 
 def _add_tail_risk_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["return_skew_6m"] = g["return_1m"].transform(lambda x: x.rolling(6, min_periods=3).skew())
@@ -87,6 +74,7 @@ def _add_tail_risk_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["cvar_5pct"] = g["return_1m"].transform(lambda x: x.rolling(12, min_periods=6).apply(_cvar, raw=True))
     return df
 
+
 def _add_technical_enrichment(df: pd.DataFrame, g) -> pd.DataFrame:
     if "rsi" in df.columns:
         df["rsi_divergence"] = g["adj close"].transform(lambda x: x.pct_change(3)) - g["rsi"].transform(lambda x: x.pct_change(3))
@@ -96,6 +84,7 @@ def _add_technical_enrichment(df: pd.DataFrame, g) -> pd.DataFrame:
         df["volume_zscore"] = g["euro_volume"].transform(lambda x: _safe_div(x - x.rolling(12, min_periods=6).mean(), x.rolling(12, min_periods=6).std()))
     return df
 
+
 def _add_seasonality_features(df: pd.DataFrame) -> pd.DataFrame:
     dates = df.index.get_level_values("date")
     df["month_sin"] = np.sin(2 * np.pi * dates.month / 12)
@@ -104,6 +93,7 @@ def _add_seasonality_features(df: pd.DataFrame) -> pd.DataFrame:
     df["is_jan"] = (dates.month == 1).astype(int)
     return df
 
+
 def add_rank_features(df: pd.DataFrame) -> pd.DataFrame:
     features_to_rank = ["mom_12_1", "mom_6_1", "sharpe_6m", "sortino_6m", "realized_vol_3m", "realized_vol_12m", "amihud_illiquidity", "return_skew_6m", "hist_var_5pct"]
     for feat in features_to_rank:
@@ -111,9 +101,11 @@ def add_rank_features(df: pd.DataFrame) -> pd.DataFrame:
         else: df[f"{feat}_rank"] = 0.5
     return df
 
+
 # ══════════════════════════════════════════════════════════════════
-# 3. FONCTIONS PRINCIPALES (Exposées)
+# 2. FONCTIONS PRINCIPALES (Exposées)
 # ══════════════════════════════════════════════════════════════════
+
 
 def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Computing daily technical indicators...")
@@ -134,6 +126,7 @@ def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["macd_sign"] = np.sign(df["macd"].fillna(0))
     df["euro_volume"] = (df["adj close"] * df["volume"]) / 1e6 if "volume" in df.columns else 0.0
     return df
+
 
 def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
     logger.info("Retrieving Fama-French factors...")
@@ -164,6 +157,7 @@ def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
     except Exception as exc:
         logger.warning(f"Fama-French retrieval failed ({exc}).")
     return data.assign(**{f: 0.0 for f in FAMA_FRENCH_FACTORS})
+
 
 def add_all_features(df: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(df.index, pd.MultiIndex): raise ValueError("MultiIndex requis.")
