@@ -45,6 +45,10 @@ def _available(df: pd.DataFrame) -> List[str]:
 
 
 def _prepare_X(df: pd.DataFrame, features: List[str]) -> pd.DataFrame:
+    df_prepared = df.copy()
+    for col in features:
+        if col not in df_prepared.columns:
+            df_prepared[col] = 0.0
     return df[features].fillna(0).replace([np.inf, -np.inf], 0)
 
 
