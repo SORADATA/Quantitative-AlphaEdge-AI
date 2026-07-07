@@ -163,5 +163,14 @@ def add_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.fillna(0).replace([np.inf, -np.inf], 0)
     logger.info(f"Features prêtes. Shape : {df.shape}")
     return df
+# Ajoute ceci à la fin de src/features/alpha_features.py
 
-# Fonctions internes omises pour la concision (utilise les mêmes que ton ancien fichier)
+def calculate_returns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fonction wrapper pour assurer la compatibilité avec MarketDataProcessor.
+    Calcule les rendements mensuels basés sur 'adj close'.
+    """
+    # On s'assure de travailler sur une copie pour éviter les problèmes d'index
+    df = df.copy()
+    g = df.groupby(level="ticker")
+    return _add_momentum_factors(df, g)
