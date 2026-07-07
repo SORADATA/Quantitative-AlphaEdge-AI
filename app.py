@@ -18,7 +18,7 @@ from mlflow.exceptions import MlflowException
 
 
 # =============================================================================
-# 1. CONFIGURATION & STYLE
+# CONFIGURATION & STYLE
 # =============================================================================
 st.set_page_config(
     page_title="AlphaEdge Dashboard",
@@ -30,8 +30,6 @@ st_autorefresh(interval=900000, key="datarefresh")
 
 BASE_DIR = Path(__file__).resolve().parent
 HF_REPO_ID = os.getenv("HF_REPO_ID", "soradata/alphaedge-data")
-
-# --- MLflow : mêmes réglages que train.py ---
 MLFLOW_TRACKING_URI = "https://soradata-alphaedge-registry.hf.space"
 HF_TOKEN = os.getenv("HF_TOKEN")
 MLFLOW_ENABLED = bool(HF_TOKEN)
@@ -40,11 +38,7 @@ if MLFLOW_ENABLED:
     os.environ["MLFLOW_TRACKING_USERNAME"] = "SORADATA"
     os.environ["MLFLOW_TRACKING_PASSWORD"] = HF_TOKEN
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-
-# Où train.py écrit les model_card.json locaux (MODEL_DIR/{market}/model_card.json).
-# Ajuste ce chemin si ton const.MODEL_DIR pointe ailleurs sur ce déploiement.
 MODEL_DIR = BASE_DIR / "models"
-
 MARKET_OPTIONS = ["CAC40", "BRVM"]
 
 st.markdown("""
@@ -94,7 +88,7 @@ st.markdown("""
 
 
 # =============================================================================
-# 2. CHARGEMENT DES DONNÉES DEPUIS HUGGING FACE (par marché)
+# CHARGEMENT DES DONNÉES DEPUIS HUGGING FACE (par marché)
 # =============================================================================
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -138,7 +132,7 @@ def load_all_data(market: str):
 
 
 # =============================================================================
-# 3. FONCTIONS UTILITAIRES — KPIs / MARCHÉ
+# FONCTIONS UTILITAIRES — KPIs / MARCHÉ
 # =============================================================================
 
 def display_kpi_card(label, value, is_percent=True, color_code=False, prefix="", minimal=False):
@@ -310,7 +304,15 @@ st.sidebar.markdown("---")
 if not df_hist.empty:
     last_dt = df_hist.index[-1]
     days_old = (datetime.now() - last_dt).days
-    status_icon, status_text = ("🟢", "● System Online") if days_old == 0 else ("🟡", "○ Data Slightly Old") if days_old <= 3 else ("🔴", "○ Data Outdated")
+    
+    # MODIFICATION ICI : Considérer les données de la veille comme "System Online" (Stratégie D-1)
+    if days_old <= 1:
+        status_icon, status_text = "🟢", "● System Online"
+    elif days_old <= 3:
+        status_icon, status_text = "🟡", "○ Data Slightly Old"
+    else:
+        status_icon, status_text = "🔴", "○ Data Outdated"
+        
     st.sidebar.info(f"Last Update: {last_dt.date()}")
     st.sidebar.markdown(f"{status_icon} {status_text}")
 else:
