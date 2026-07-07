@@ -120,9 +120,15 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
     proba = model.predict_proba(df_test)[:, 1]
     final_auc = roc_auc_score(df_test["target"], proba)
     final_apr = average_precision_score(df_test["target"], proba)
+    
+    # Récupération sécurisée des métriques financières
     fin_metrics = calculate_financial_metrics(df_test, probas=proba, threshold=0.5)
+    f_sharpe = fin_metrics.get("sharpe", 0.0)
+    f_sortino = fin_metrics.get("sortino", 0.0)
+    f_calmar = fin_metrics.get("calmar", 0.0)
+    f_max_dd = fin_metrics.get("max_drawdown", -1.0)
 
-    logger.info(f"[{market_name}] Test Set -> AUC: {final_auc:.4f} | Sharpe: {fin_metrics['sharpe']:.2f}")
+    logger.info(f"[{market_name}] Test Set -> AUC: {final_auc:.4f} | Sortino: {f_sortino:.2f} | Max DD: {f_max_dd*100:.1f}%")
 
     # 4. Walk-Forward (pour valider la stabilité)
     df_full = pd.concat([df_train, df_test])
@@ -143,21 +149,24 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
         "mlflow": {"success": False, "run_id": None, "promoted": False},
     }
 
-    # 6. MLOps : MLflow & Promotion
+    # 6. MLOps : MLflow & Logique de Promotion
     if USE_MLFLOW:
         registered_model_name = f"AlphaEdge_Ensemble_{market_name}"
         client = MlflowClient()
 
         try:
             with mlflow.start_run(run_name=f"Ensemble_{market_name}") as run:
+                # On log désormais tout l'arsenal de risque
                 mlflow.log_metrics({
                     "AUC_Test": final_auc,
                     "WF_AUC_Mean": wf_auc_mean,
-                    "Sharpe_Ratio": fin_metrics["sharpe"],
-                    "Max_Drawdown": fin_metrics["max_drawdown"]
+                    "Sharpe_Ratio": f_sharpe,
+                    "Sortino_Ratio": f_sortino,
+                    "Calmar_Ratio": f_calmar,
+                    "Max_Drawdown": f_max_dd
                 })
                 
-                # Sauvegarde du modèle au format standard PyFunc
+                # Sauvegarde du modèle
                 pyfunc_model = AlphaEdgePyFunc(model_instance=model)
                 input_example = df_test[model.features_].head(3)
                 signature = infer_signature(input_example, pyfunc_model.predict(None, input_example))
@@ -174,23 +183,41 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
                 # Enregistrement dans le Registry
                 mv = mlflow.register_model(f"runs:/{run.info.run_id}/ensemble_model", registered_model_name)
                 
-                # Le Match : Champion vs Challenger
+                # Extraction des stats du Champion actuel
                 champion_sharpe = -999.0
+                champion_sortino = -999.0
+                champion_max_dd = -999.0
                 try:
                     current_champ = client.get_model_version_by_alias(registered_model_name, "champion")
-                    champion_sharpe = client.get_run(current_champ.run_id).data.metrics.get("Sharpe_Ratio", -999.0)
+                    champ_metrics = client.get_run(current_champ.run_id).data.metrics
+                    champion_sharpe = champ_metrics.get("Sharpe_Ratio", -999.0)
+                    champion_sortino = champ_metrics.get("Sortino_Ratio", -999.0)
+                    champion_max_dd = champ_metrics.get("Max_Drawdown", -999.0)
                 except:
-                    logger.info(f"[{market_name}] Aucun champion trouvé. C'est le premier modèle !")
+                    logger.info(f"[{market_name}] Aucun champion trouvé. Déploiement initial.")
 
-                if fin_metrics["sharpe"] >= SHARPE_THRESHOLD and fin_metrics["max_drawdown"] >= MAX_DD_THRESHOLD:
-                    if fin_metrics["sharpe"] >= champion_sharpe:
+                # =========================================================
+                # JURY DE PROMOTION (Hedge Fund Logic)
+                # =========================================================
+                # 1. Hard Constraints (Le modèle est-il globalement sain ?)
+                passes_safety = (f_sharpe >= SHARPE_THRESHOLD) and (f_max_dd >= MAX_DD_THRESHOLD)
+                
+                # 2. Conditions relatives (Le Challenger bat-il le Champion ?)
+                # On tolère une dégradation du Drawdown de maximum 2% par rapport au champion
+                safer_dd = f_max_dd >= (champion_max_dd - 0.02)
+                better_sortino = f_sortino > champion_sortino
+
+                if passes_safety:
+                    # Le Sortino est le juge final de la qualité du risque
+                    if better_sortino and safer_dd:
                         client.set_registered_model_alias(registered_model_name, "champion", mv.version)
                         model_card["mlflow"]["promoted"] = True
-                        logger.info(f"[{market_name}] 🏆 PROMOTION RÉUSSIE : v{mv.version} est le nouveau Champion !")
+                        logger.info(f"[{market_name}] 🏆 PROMOTION v{mv.version} ! Sortino amélioré ({f_sortino:.2f} > {champion_sortino:.2f})")
                     else:
-                        logger.warning(f"[{market_name}] ❌ CHALLENGER BATTU : {fin_metrics['sharpe']:.2f} < {champion_sharpe:.2f}")
+                        raison = "Drawdown trop dégradé" if not safer_dd else "Sortino insuffisant"
+                        logger.warning(f"[{market_name}] ❌ CHALLENGER REJETÉ : {raison}.")
                 else:
-                    logger.warning(f"[{market_name}] ❌ SÉCURITÉ : Seuils minimums non atteints.")
+                    logger.warning(f"[{market_name}] ❌ SÉCURITÉ : Sharpe ou Drawdown sous les seuils absolus.")
 
         except Exception as e:
             logger.error(f"[{market_name}] Erreur durant le flux MLflow : {e}")
