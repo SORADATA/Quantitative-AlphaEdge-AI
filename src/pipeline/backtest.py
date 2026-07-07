@@ -505,11 +505,21 @@ def generate_live_signals(
     """
     Génère les signaux du jour (séance N) pour alimenter le dashboard.
 
-    Fix critique : `_build_daily_snapshot` renvoie désormais un index simple
+    Fix critique #1 (hérité) : `_build_daily_snapshot` renvoie un index simple
     de tickers (via `.xs(level="date")`) au lieu d'un MultiIndex (ticker, date).
     Avant ce fix, `_select_tickers` retournait des tuples `(ticker, date)` qui ne
     matchaient jamais `daily_prices.columns`, laissant l'allocation vide en
-    permanence — d'où les signaux NEUTRAL à 0.00 malgré des probabilités élevées.
+    permanence — d'où des signaux NEUTRAL malgré des probabilités élevées.
+
+    Fix critique #2 (ce correctif) : le mapping final Ticker -> Allocation
+    utilisait une clé "ticker_root" (suffixe de place type ".PA"/".AS" retiré,
+    ex "AI.PA" -> "AI"), alors que le dict `allocation` est construit avec les
+    tickers COMPLETS (même format que `daily_prices.columns`, ex "AI.PA").
+    Le `.map(allocation)` sur la version tronquée ne trouvait donc jamais de
+    correspondance -> Allocation = 0.0 pour toutes les lignes -> Signal =
+    "NEUTRAL" systématique, même quand `proba_upside` dépassait largement le
+    seuil `proba_min`. Le mapping se fait désormais directement sur `Ticker`,
+    dans le même référentiel que `allocation`.
     """
     snapshot, last_date = _build_daily_snapshot(df_daily)
     snapshot_scored = _generate_monthly_signals(snapshot, model)
@@ -554,8 +564,26 @@ def generate_live_signals(
         rebalance_history = pd.concat([rebalance_history, new_row]).sort_index()
 
     out = snapshot_scored.reset_index().rename(columns={"ticker": "Ticker"})
-    out["ticker_root"] = out["Ticker"].apply(lambda t: t.split(".", 1)[0])
-    out["Allocation"] = out["ticker_root"].map(allocation).fillna(0.0)
+
+    # --- Mapping Allocation ---------------------------------------------
+    # `allocation` est keyé avec le ticker COMPLET (même format que
+    # `daily_prices.columns`, ex "AI.PA"). On mappe donc directement sur
+    # `Ticker`, sans tronquer le suffixe de place — ce tronquage était la
+    # cause du bug (voir docstring ci-dessus).
+    out["Allocation"] = out["Ticker"].map(allocation).fillna(0.0)
+
+    # Garde-fou : si `allocation` n'est pas vide mais qu'aucune ligne n'a pu
+    # être mappée, c'est très probablement un nouveau mismatch de format de
+    # ticker entre `snapshot_scored.index` et `daily_prices.columns`.
+    if allocation and out["Allocation"].sum() == 0.0:
+        logger.warning(
+            "Allocation non nulle calculée (%d positions) mais aucun mapping "
+            "vers 'Ticker' n'a matché — vérifier la cohérence de format entre "
+            "snapshot_scored.index et daily_prices.columns (ex : suffixe de "
+            "place manquant/en trop).",
+            len(allocation),
+        )
+
     out["Signal"] = np.where(out["Allocation"] > 0, "BUY", "NEUTRAL")
     out["Proba_Hausse"] = (out["proba_upside"] * 100).round(1)
 
