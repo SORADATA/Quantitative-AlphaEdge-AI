@@ -2,6 +2,7 @@ import os
 import json
 import warnings
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -36,33 +37,22 @@ else:
 
 
 # =============================================================================
-# HELPERS MLFLOW
+# HELPERS & VALIDATION
 # =============================================================================
-def _check_registry_available(client: MlflowClient) -> bool:
-    """
-    Vérifie que le backend MLflow distant supporte le Model Registry
-    avant de tenter un register_model (sinon erreur explicite et claire).
-    """
-    try:
-        client.search_registered_models(max_results=1)
-        return True
-    except MlflowException as e:
-        logger.error(
-            "Le Model Registry ne semble pas disponible sur le serveur MLflow distant "
-            f"(backend-store probablement non compatible) : {e}"
-        )
-        return False
+class AlphaEdgePyFunc(mlflow.pyfunc.PythonModel):
+    def __init__(self, model_instance):
+        self.model = model_instance
 
+    def predict(self, context, model_input, params=None):
+        return self.model.predict_proba(model_input)[:, 1]
 
-# =============================================================================
-# WALK-FORWARD VALIDATION
-# =============================================================================
 def walk_forward_eval(
     df: pd.DataFrame,
     n_windows: int = 4,
     test_months: int = 3,
     n_optuna_trials: int = 20,
 ) -> pd.DataFrame:
+    """Évaluation robuste par fenêtres glissantes pour valider la stabilité."""
     dates = df.index.get_level_values("date").unique().sort_values()
     results = []
 
@@ -77,9 +67,7 @@ def walk_forward_eval(
             & (df.index.get_level_values("date") <= test_end)
         ]
 
-        if len(df_tr) < 50 or len(df_te) < 5:
-            continue
-        if len(df_te["target"].unique()) < 2:
+        if len(df_tr) < 50 or len(df_te) < 5 or len(df_te["target"].unique()) < 2:
             continue
 
         model = AlphaEdgeEnsemble(n_optuna_trials=n_optuna_trials)
@@ -87,223 +75,155 @@ def walk_forward_eval(
         proba = model.predict_proba(df_te)[:, 1]
 
         results.append({
-            "window":     i + 1,
+            "window": i + 1,
             "test_start": str(test_start.date()),
-            "test_end":   str(test_end.date()),
-            "auc":        round(roc_auc_score(df_te["target"], proba), 4),
-            "apr":        round(average_precision_score(df_te["target"], proba), 4),
-            "n_test":     len(df_te),
+            "test_end": str(test_end.date()),
+            "auc": round(roc_auc_score(df_te["target"], proba), 4),
+            "apr": round(average_precision_score(df_te["target"], proba), 4),
+            "n_test": len(df_te),
         })
-        logger.info(
-            f"Window {i+1} | AUC: {results[-1]['auc']:.4f} | "
-            f"APR: {results[-1]['apr']:.4f} | n={results[-1]['n_test']}"
-        )
+        logger.info(f"WF Window {i+1} | AUC: {results[-1]['auc']:.4f} | APR: {results[-1]['apr']:.4f}")
 
     return pd.DataFrame(results)
-
-
-# =============================================================================
-# WRAPPER MLFLOW PYFUNC
-# =============================================================================
-class AlphaEdgePyFunc(mlflow.pyfunc.PythonModel):
-    def __init__(self, model_instance):
-        self.model = model_instance
-
-    def predict(self, context, model_input, params=None):
-        # MLflow s'attend à recevoir un DataFrame en entrée
-        # On retourne uniquement la probabilité de la classe 1 (le signal d'achat)
-        return self.model.predict_proba(model_input)[:, 1]
 
 
 # =============================================================================
 # PIPELINE D'ENTRAÎNEMENT
 # =============================================================================
 def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
-    logger.info(f"Début du cycle d'entraînement AlphaEdge — {market_name}")
+    logger.info(f"Début de l'entraînement — {market_name}")
 
     data_path = DATA_DIR / "processed" / market_name / "monthly_features.parquet"
     if not data_path.exists():
         raise FileNotFoundError(f"Fichier source introuvable : {data_path}")
 
+    # 1. Préparation des données et de la target
     df = pd.read_parquet(data_path)
-
-    # Eviter le leakage data
-    df["future_return"] = df.groupby(level="ticker")["adj close"].pct_change(1).shift(-1)
+    df["future_return"] = df.groupby(level="ticker")["adj_close" if "adj_close" in df.columns else "adj close"].pct_change(1).shift(-1)
     df["target"] = df["future_return"].gt(0).astype(int)
     df = df.dropna(subset=["target", "future_return"])
 
     dates = df.index.get_level_values("date")
     split_date = dates.max() - pd.DateOffset(months=6)
 
-    # Split temporel AVANT add_all_features pour éviter le leakage global
-    df_train = df[dates <= split_date].copy()
-    df_test = df[dates > split_date].copy()
-
-    df_train = add_all_features(df_train)
-    df_test = add_all_features(df_test)
+    df_train = add_all_features(df[dates <= split_date].copy())
+    df_test = add_all_features(df[dates > split_date].copy())
 
     if len(df_train) < 100:
-        raise ValueError(f"Volume de données insuffisant : {len(df_train)}")
+        raise ValueError(f"Volume de données insuffisant pour {market_name}: {len(df_train)} lignes.")
 
-    # Baseline
-    all_feats = [f for g in FEATURE_GROUPS.values() for f in g]
-    available = [f for f in all_feats if f in df_train.columns]
-    dummy = DummyClassifier(strategy="most_frequent").fit(df_train[available], df_train["target"])
-    baseline_auc = roc_auc_score(df_test["target"], dummy.predict_proba(df_test[available])[:, 1])
-
-    # Entraînement
+    # 2. Entraînement du modèle
     model = AlphaEdgeEnsemble(n_optuna_trials=50)
     model.fit(df_train, df_train["target"])
 
+    # 3. Évaluation sur Test Set récent
     proba = model.predict_proba(df_test)[:, 1]
     final_auc = roc_auc_score(df_test["target"], proba)
     final_apr = average_precision_score(df_test["target"], proba)
-    lift = final_auc - baseline_auc
+    
+    # Récupération sécurisée des métriques financières
     fin_metrics = calculate_financial_metrics(df_test, probas=proba, threshold=0.5)
+    f_sharpe = fin_metrics.get("sharpe", 0.0)
+    f_sortino = fin_metrics.get("sortino", 0.0)
+    f_calmar = fin_metrics.get("calmar", 0.0)
+    f_max_dd = fin_metrics.get("max_drawdown", -1.0)
 
-    logger.info(f"ML -> AUC : {final_auc:.4f} | APR : {final_apr:.4f} | Lift : +{lift:.4f}")
-    logger.info(f"Finances -> Sharpe : {fin_metrics['sharpe']} | Max DD : {fin_metrics['max_drawdown']}")
+    logger.info(f"[{market_name}] Test Set -> AUC: {final_auc:.4f} | Sortino: {f_sortino:.2f} | Max DD: {f_max_dd*100:.1f}%")
 
-    # Walk-forward sur df entier (target déjà calculé, pas de leakage supplémentaire)
+    # 4. Walk-Forward (pour valider la stabilité)
     df_full = pd.concat([df_train, df_test])
     wf_results = walk_forward_eval(df_full, n_windows=4, test_months=3, n_optuna_trials=20)
+    wf_auc_mean = wf_results["auc"].mean() if not wf_results.empty else final_auc
 
-    # Sauvegarde locale par marché (TOUJOURS faite, indépendamment de MLflow)
+    # 5. Sauvegarde Locale
     market_model_dir = MODEL_DIR / market_name
     market_model_dir.mkdir(parents=True, exist_ok=True)
     model.save(market_model_dir / "ensemble_model.pkl")
-    logger.info(f"Modèle sauvegardé : {market_model_dir / 'ensemble_model.pkl'}")
 
     model_card = {
-        "market":       market_name,
-        "trained_at":   pd.Timestamp.now().isoformat(),
-        "architecture": "XGBoost + LightGBM + Ridge → LogisticRegression",
-        "metrics_ml": {
-            "auc_test":     round(final_auc, 4),
-            "apr_test":     round(final_apr, 4),
-            "baseline_auc": round(baseline_auc, 4),
-            "lift":         round(lift, 4),
-        },
-        "metrics_fin":  fin_metrics,
-        "model_weights": model.get_model_weights(),
-        "walk_forward":  wf_results.to_dict(orient="records") if not wf_results.empty else [],
-        "n_features":    len(model.features_),
-        "train_size":    len(df_train),
-        "test_size":     len(df_test),
-        "mlflow": {
-            "attempted": USE_MLFLOW,
-            "success":   False,
-            "run_id":    None,
-            "version":   None,
-            "promoted":  False,
-        },
+        "market": market_name,
+        "trained_at": pd.Timestamp.now().isoformat(),
+        "metrics_ml": {"auc_test": round(final_auc, 4), "apr_test": round(final_apr, 4)},
+        "metrics_fin": fin_metrics,
+        "walk_forward_auc_mean": round(wf_auc_mean, 4),
+        "mlflow": {"success": False, "run_id": None, "promoted": False},
     }
-    with open(market_model_dir / "model_card.json", "w") as f:
-        json.dump(model_card, f, indent=2)
 
-    # =========================================================================
-    # MLFLOW — chaque étape est tracée, aucune exception n'est avalée silencieusement
-    # =========================================================================
+    # 6. MLOps : MLflow & Logique de Promotion
     if USE_MLFLOW:
         registered_model_name = f"AlphaEdge_Ensemble_{market_name}"
         client = MlflowClient()
 
-        if not _check_registry_available(client):
-            logger.error(
-                f"[{market_name}] Model Registry indisponible — le run sera loggé "
-                "mais ne sera PAS enregistré dans le registre."
-            )
-
         try:
             with mlflow.start_run(run_name=f"Ensemble_{market_name}") as run:
-                mlflow.log_params({
-                    "architecture": "XGB+LGB+Ridge->LR",
-                    "market":       market_name,
-                    "n_features":   len(model.features_),
-                })
+                # On log désormais tout l'arsenal de risque
                 mlflow.log_metrics({
-                    "AUC_Test":     final_auc,
-                    "APR_Test":     final_apr,
-                    "Sharpe_Ratio": fin_metrics["sharpe"],
-                    "Max_Drawdown": fin_metrics["max_drawdown"],
-                    "Total_Return": fin_metrics["total_return"],
-                    "WF_AUC_mean":  wf_results["auc"].mean() if not wf_results.empty else 0.0,
-                    "primary_metric": final_auc
+                    "AUC_Test": final_auc,
+                    "WF_AUC_Mean": wf_auc_mean,
+                    "Sharpe_Ratio": f_sharpe,
+                    "Sortino_Ratio": f_sortino,
+                    "Calmar_Ratio": f_calmar,
+                    "Max_Drawdown": f_max_dd
                 })
                 
-                mlflow.log_dict(model_card, "model_card.json")
-
-                # --- Création de l'instance PyFunc et de la Signature ---
+                # Sauvegarde du modèle
                 pyfunc_model = AlphaEdgePyFunc(model_instance=model)
+                input_example = df_test[model.features_].head(3)
+                signature = infer_signature(input_example, pyfunc_model.predict(None, input_example))
                 
-                input_example = df_test[model.features_].head(5)
-                signature = infer_signature(
-                    model_input=input_example, 
-                    model_output=pyfunc_model.predict(context=None, model_input=input_example)
-                )
-
-                model_info = mlflow.pyfunc.log_model(
-                    artifact_path="ensemble_model",
-                    python_model=pyfunc_model,
+                mlflow.pyfunc.log_model(
+                    "ensemble_model", 
+                    python_model=pyfunc_model, 
                     signature=signature,
                     input_example=input_example
                 )
 
-                logger.info(f"[{market_name}] Modèle loggé sur MLflow — run_id={run.info.run_id}")
+                model_card["mlflow"].update({"success": True, "run_id": run.info.run_id})
 
-                model_card["mlflow"]["success"] = True
-                model_card["mlflow"]["run_id"] = run.info.run_id
-
-                # Enregistrement dans le Model Registry
+                # Enregistrement dans le Registry
+                mv = mlflow.register_model(f"runs:/{run.info.run_id}/ensemble_model", registered_model_name)
+                
+                # Extraction des stats du Champion actuel
+                champion_sharpe = -999.0
+                champion_sortino = -999.0
+                champion_max_dd = -999.0
                 try:
-                    mv = mlflow.register_model(
-                        model_uri=f"runs:/{run.info.run_id}/ensemble_model",
-                        name=registered_model_name,
-                    )
-                    model_card["mlflow"]["version"] = mv.version
-                    logger.info(
-                        f"[{market_name}] Modèle enregistré : "
-                        f"{registered_model_name} v{mv.version}"
-                    )
+                    current_champ = client.get_model_version_by_alias(registered_model_name, "champion")
+                    champ_metrics = client.get_run(current_champ.run_id).data.metrics
+                    champion_sharpe = champ_metrics.get("Sharpe_Ratio", -999.0)
+                    champion_sortino = champ_metrics.get("Sortino_Ratio", -999.0)
+                    champion_max_dd = champ_metrics.get("Max_Drawdown", -999.0)
+                except:
+                    logger.info(f"[{market_name}] Aucun champion trouvé. Déploiement initial.")
 
-                    if (
-                        fin_metrics["sharpe"] >= SHARPE_THRESHOLD
-                        and fin_metrics["max_drawdown"] >= MAX_DD_THRESHOLD
-                    ):
-                        client.set_registered_model_alias(
-                            registered_model_name, "champion", mv.version
-                        )
+                # =========================================================
+                # JURY DE PROMOTION (Hedge Fund Logic)
+                # =========================================================
+                # 1. Hard Constraints (Le modèle est-il globalement sain ?)
+                passes_safety = (f_sharpe >= SHARPE_THRESHOLD) and (f_max_dd >= MAX_DD_THRESHOLD)
+                
+                # 2. Conditions relatives (Le Challenger bat-il le Champion ?)
+                # On tolère une dégradation du Drawdown de maximum 2% par rapport au champion
+                safer_dd = f_max_dd >= (champion_max_dd - 0.02)
+                better_sortino = f_sortino > champion_sortino
+
+                if passes_safety:
+                    # Le Sortino est le juge final de la qualité du risque
+                    if better_sortino and safer_dd:
+                        client.set_registered_model_alias(registered_model_name, "champion", mv.version)
                         model_card["mlflow"]["promoted"] = True
-                        logger.info(
-                            f"[{market_name}] Promotion : Version {mv.version} → 'champion'."
-                        )
+                        logger.info(f"[{market_name}] 🏆 PROMOTION v{mv.version} ! Sortino amélioré ({f_sortino:.2f} > {champion_sortino:.2f})")
                     else:
-                        logger.warning(
-                            f"[{market_name}] Promotion refusée : seuils non atteints "
-                            f"(Sharpe={fin_metrics['sharpe']:.2f}, "
-                            f"MaxDD={fin_metrics['max_drawdown']:.2f}). "
-                            "Ancien champion maintenu."
-                        )
-                except MlflowException:
-                    logger.exception(
-                        f"[{market_name}] Échec de l'enregistrement dans le Model Registry "
-                        "— le run reste loggé mais le modèle n'est pas versionné."
-                    )
+                        raison = "Drawdown trop dégradé" if not safer_dd else "Sortino insuffisant"
+                        logger.warning(f"[{market_name}] ❌ CHALLENGER REJETÉ : {raison}.")
+                else:
+                    logger.warning(f"[{market_name}] ❌ SÉCURITÉ : Sharpe ou Drawdown sous les seuils absolus.")
 
-        except MlflowException:
-            logger.exception(
-                f"[{market_name}] Échec MLflow (erreur API/connexion) — "
-                "modèle local sauvegardé uniquement."
-            )
-        except Exception:
-            logger.exception(
-                f"[{market_name}] Échec MLflow (erreur inattendue) — "
-                "modèle local sauvegardé uniquement."
-            )
+        except Exception as e:
+            logger.error(f"[{market_name}] Erreur durant le flux MLflow : {e}")
 
-        # Re-sauvegarde du model_card avec le statut MLflow final
-        with open(market_model_dir / "model_card.json", "w") as f:
-            json.dump(model_card, f, indent=2)
+    with open(market_model_dir / "model_card.json", "w") as f:
+        json.dump(model_card, f, indent=2)
 
     return model, model_card
 
@@ -313,22 +233,23 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
 # =============================================================================
 if __name__ == "__main__":
     config_dir = CONFIG_DIR / "markets"
-    if not config_dir.exists():
-        raise FileNotFoundError(f"Dossier de configs introuvable : {config_dir}")
-
     failures = []
+    
+    if not config_dir.exists():
+        logger.error(f"Dossier de configs introuvable : {config_dir}")
+        raise SystemExit(1)
+
     for config_file in sorted(config_dir.glob("*.json")):
         with open(config_file) as f:
             market_cfg = json.load(f)
-        market = market_cfg.get("market_name")
-        if not market:
-            logger.warning(f"Clé 'market_name' absente dans {config_file.name}, ignoré.")
-            continue
-        try:
-            train_pipeline(market)
-        except Exception:
-            logger.exception(f"[{market}] Échec complet du pipeline d'entraînement.")
-            failures.append(market)
+            market = market_cfg.get("market_name")
+            
+        if market:
+            try:
+                train_pipeline(market)
+            except Exception as e:
+                logger.critical(f"[{market}] Échec complet de l'entraînement : {e}", exc_info=True)
+                failures.append(market)
 
     if failures:
         logger.error(f"Marchés en échec : {failures}")
