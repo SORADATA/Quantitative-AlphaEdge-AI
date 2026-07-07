@@ -46,15 +46,17 @@ def _available(df: pd.DataFrame) -> List[str]:
 
 def _prepare_X(df: pd.DataFrame, features: List[str]) -> pd.DataFrame:
     df_prepared = df.copy()
-    for col in features:
-        if col not in df_prepared.columns:
+    missing = [col for col in features if col not in df_prepared.columns]
+    if missing:
+        logger.warning(f"Features manquantes, remplies à 0.0 : {missing}")
+        for col in missing:
             df_prepared[col] = 0.0
-    return df[features].fillna(0).replace([np.inf, -np.inf], 0)
-
+    return df_prepared[features].fillna(0).replace([np.inf, -np.inf], 0)
 
 # ══════════════════════════════════════════════════════════════════
 # OPTUNA OBJECTIVES
 # ══════════════════════════════════════════════════════════════════
+
 
 def _xgb_objective(X: pd.DataFrame, y: pd.Series, n_trials: int) -> xgb.XGBClassifier:
     from sklearn.metrics import roc_auc_score
