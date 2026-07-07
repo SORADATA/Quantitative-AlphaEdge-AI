@@ -122,6 +122,8 @@ def _warn_if_missing(x_input: pd.DataFrame) -> None:
             f"Scoring : {missing_ratio:.1%} de valeurs manquantes en moyenne dans les "
             "features avant imputation à 0 — vérifier la fraîcheur des données amont."
         )
+
+
 def _build_price_matrix(df_daily: pd.DataFrame, ffill_limit: int = MAX_PRICE_FFILL_DAYS) -> pd.DataFrame:
     """
     Construit la matrice de prix (ticker x date) avec un forward-fill borné.
@@ -137,12 +139,12 @@ def _build_price_matrix(df_daily: pd.DataFrame, ffill_limit: int = MAX_PRICE_FFI
     prices = df_daily[col_name].unstack()
     prices = prices.ffill(limit=ffill_limit)
     
-    # Vérification optionnelle pour logger les tickers avec des prix "stale"
     stale_cols = prices.columns[prices.iloc[-1].isna()]
     if len(stale_cols) > 0:
         logger.debug(f"{len(stale_cols)} tickers avec des prix obsolètes ou manquants.")
         
     return prices
+
 
 def _generate_monthly_signals(month_data: pd.DataFrame, model: Any) -> pd.DataFrame:
     if month_data.empty:
@@ -200,15 +202,6 @@ def _blend_with_conviction(
 def _compute_turnover(new_alloc: Dict[str, float], old_alloc: Dict[str, float]) -> float:
     all_tickers = set(new_alloc) | set(old_alloc)
     return sum(abs(new_alloc.get(t, 0.0) - old_alloc.get(t, 0.0)) for t in all_tickers) / 2.0
-
-
-def _build_price_matrix(df_daily: pd.DataFrame, ffill_limit: int = MAX_PRICE_FFILL_DAYS) -> pd.DataFrame:
-    prices = df_daily["adj_close"].unstack()
-    prices = prices.ffill(limit=ffill_limit)
-    stale_cols = prices.columns[prices.iloc[-1].isna()]
-    if len(stale_cols) > 0:
-        logger.debug(f"{len(stale_cols)} tickers exclus (prix obsolètes/manquants) : {list(stale_cols)[:10]}...")
-    return prices
 
 
 # =============================================================================
