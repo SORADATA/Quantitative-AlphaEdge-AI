@@ -181,63 +181,72 @@ python train.py
 Trains `AlphaEdgeEnsemble` for every configured market, runs walk-forward validation, and (if `HF_TOKEN` is set) evaluates promotion to MLflow `champion`.
 
 ---
-
 ## 📂 Project Structure
-CAC40-Quantitative-Analysis-Predictive-Asset-Allocation/
-├── .github/
-│ └── workflows/
-│ └── daily_run.yml # Automated daily execution (ETL + backtest + signals)
-├── config/
-│ └── markets/ # One JSON per market (tickers, benchmark, name)
-│ ├── cac40.json
-│ ├── us_tech.json
-│ └── brvm.json
-├── data/
-│ ├── raw/ # Historical price data
-│ └── processed/
-│ └── <MARKET>/
-│ ├── daily_raw.parquet
-│ ├── monthly_features.parquet
-│ ├── portfolio_history.parquet
-│ ├── rebalance_history.parquet
-│ └── latest_signals.parquet
-├── images/ # Screenshots & visualizations
-├── models/
-│ └── <MARKET>/
-│ ├── ensemble_model.pkl # Local fallback model
-│ └── model_card.json # Training metadata & metrics
-├── notebooks/ # Research: EDA, model training, backtesting
-├── src/
-│ ├── extract/
-│ │ └── extractor.py # Market data extraction (yfinance)
-│ ├── transform/
-│ │ ├── processor.py # Daily/monthly aggregation
-│ │ └── ticker_manager.py # Ticker changes & delisting handling
-│ ├── features/
-│ │ └── alpha_features.py # Feature engineering (momentum, vol, risk, FF betas)
-│ ├── models/
-│ │ ├── ensemble.py # AlphaEdgeEnsemble (XGBoost+LightGBM+Ridge -> LogReg)
-│ │ └── model_loader.py # MLflow champion loader with local fallback
-│ ├── pipeline/
-│ │ ├── etl.py # get_data_pipeline orchestration
-│ │ └── backtest.py # Monthly rebalancing simulation + live signals
-│ └── utils/
-│ ├── math_utils.py # Shared rolling-window statistics
-│ ├── metrics.py # Financial metrics (Sharpe, Sortino, Calmar, MDD)
-│ ├── market_utils.py # Benchmark returns helper
-│ ├── feature_utils.py # ATR / MACD computation
-│ ├── config_loader.py
-│ └── logger.py
-├── tests/ # Unit tests
-├── app.py # Streamlit dashboard (multi-market)
-├── daily_run.py # Main daily pipeline orchestrator
-├── train.py # Training + walk-forward + MLflow promotion
-├── const.py # Centralized constants & thresholds
-├── requirements.txt # Python dependencies
-├── CHANGELOG.md # Notable fixes and changes per version
-├── LICENSE # MIT License
-└── README.md # You are here!
 
+
+├── .github
+│   └── workflows
+│       ├── daily_update.yml
+│       ├── ml_pipeline.yml
+│       ├── pre-release.yml
+│       ├── python-app.yml
+│       └── release.yml
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── README.md
+├── app.py
+├── config
+│   └── markets
+│       └── cac40.json
+├── const.py
+├── debug_run.txt
+├── dev.sh
+├── gen_tree.py
+├── images
+│   ├── Dashboard.png
+│   └── Signal.png
+├── notebooks
+│   └── 01_EDA.ipynb
+├── requirements.txt
+├── src
+│   ├── extract
+│   │   ├── extractor.py
+│   │   └── yfinance_downloader_test.py
+│   ├── features
+│   │   └── alpha_features.py
+│   ├── models
+│   │   ├── CAC40
+│   │   │   ├── ensemble_model.pkl
+│   │   │   └── model_card.json
+│   │   ├── US_TECH
+│   │   │   ├── ensemble_model.pkl
+│   │   │   └── model_card.json
+│   │   ├── __init__.py
+│   │   ├── cv.py
+│   │   ├── ensemble.py
+│   │   ├── ensemble_model.pkl
+│   │   ├── model_card.json
+│   │   ├── model_loader.py
+│   │   └── train.py
+│   ├── pipeline
+│   │   ├── backtest.py
+│   │   ├── daily_run.py
+│   │   └── etl.py
+│   ├── transform
+│   │   ├── processor.py
+│   │   └── ticker_manager.py
+│   └── utils
+│       ├── config_loader.py
+│       ├── feature_utils.py
+│       ├── logger.py
+│       ├── market_utils.py
+│       ├── math_utils.py
+│       └── metrics.py
+├── structure.txt
+└── tests
+    ├── get_composition.py
+    ├── plot_results.py
+    └── test_pipeline.py
 
 ---
 
