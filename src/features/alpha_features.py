@@ -101,6 +101,7 @@ def _add_seasonality_features(df: pd.DataFrame) -> pd.DataFrame:
     df["month_sin"] = np.sin(2 * np.pi * dates.month / 12)
     df["month_cos"] = np.cos(2 * np.pi * dates.month / 12)
     df["is_q_end"] = dates.month.isin([3, 6, 9, 12]).astype(int)
+    df["is_jan"] = (dates.month == 1).astype(int)
     return df
 
 def add_rank_features(df: pd.DataFrame) -> pd.DataFrame:
