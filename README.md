@@ -57,7 +57,7 @@ The current repository is organized around a **CAC40 production setup**, while k
 
 | Portfolio Performance | AI Trading Signals |
 |:---:|:---:|
-| ![Dashboard Overview](images/Dashboard.png) | ![Trading Signals](images/Signal.png) |
+| ![Dashboard Overview](docs/images/Dashboard.png) | ![Trading Signals](docs/images/Signal.png) |
 
 </div>
 
