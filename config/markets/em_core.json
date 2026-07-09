@@ -1,0 +1,28 @@
+{
+    "market_name": "EM_CORE",
+    "description": "Sous-ensemble représentatif de marchés émergents. Pays couverts : Chine, Taïwan, Corée du Sud, Inde, Brésil, Turquie, Afrique du Sud, Mexique, Malaisie, Thaïlande.",
+    "benchmark_ticker": "EEM",
+    "tickers": [
+        "TSM", "005930.KS", "000660.KS", "0700.HK", "9988.HK",
+        "601398.SS", "601857.SS", "600519.SS", "601288.SS", "601988.SS",
+        "1299.HK", "0939.HK", "3690.HK", "1810.HK", "2318.HK",
+        "INFY.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+        "BHARTIARTL.NS", "ITC.NS", "SBIN.NS", "LT.NS", "HINDUNILVR.NS",
+        "VALE3.SA", "PETR4.SA", "ITUB4.SA", "BBDC4.SA", "ABEV3.SA",
+        "B3SA3.SA", "WEGE3.SA", "BBAS3.SA", "SUZB3.SA", "RENT3.SA",
+        "005380.KS", "051910.KS", "035420.KS", "006400.KS", "035720.KS",
+        "2330.TW", "2317.TW", "2454.TW", "2882.TW", "1301.TW",
+        "PDD", "JD", "BABA", "NTES", "BIDU",
+        "ASELS.IS", "THYAO.IS", "GARAN.IS", "BIMAS.IS", "AKBNK.IS",
+        "NPN.JO", "PRX.AS", "SOL.JO", "FSR.JO", "SBK.JO",
+        "AMXL.MX", "WALMEX.MX", "GFNORTEO.MX", "CEMEXCPO.MX", "FEMSAUBD.MX",
+        "1211.HK", "2020.HK", "0388.HK", "0016.HK", "0688.HK",
+        "600036.SS", "600276.SS", "000858.SZ", "300750.SZ", "601601.SS",
+        "0883.HK", "2628.HK", "1928.HK", "3968.HK", "6098.HK",
+        "017670.KS", "032830.KS", "066570.KS", "015760.KS", "003550.KS",
+        "2308.TW", "2412.TW", "3034.TW", "2884.TW", "5871.TW",
+        "SIME.KL", "MAYBANK.KL", "PBBANK.KL", "PCHEM.KL", "TENAGA.KL",
+        "SCC.BK", "PTT.BK", "CPALL.BK", "AOT.BK", "KBANK.BK"
+    ],
+    "ff_region": "Emerging_5_Factors"
+}
