@@ -118,7 +118,7 @@ st.markdown("""
 
 
 # =============================================================================
-# CHARGEMENT DES DONNEES DEPUIS HUGGING FACE (par marche) - version robuste
+# CHARGEMENT DES DONNEES DEPUIS HUGGING FACE
 # =============================================================================
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -164,7 +164,7 @@ def load_all_data(market: str):
 
 
 # =============================================================================
-# FONCTIONS UTILITAIRES - KPIs / MARCHE
+# FONCTIONS UTILITAIRES
 # =============================================================================
 
 def display_kpi_card(label, value, is_percent=True, color_code=False, prefix="", suffix="", minimal=False):
