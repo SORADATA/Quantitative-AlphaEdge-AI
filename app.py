@@ -16,15 +16,17 @@ import mlflow
 from mlflow.tracking import MlflowClient
 from mlflow.exceptions import MlflowException
 
+
 # =============================================================================
 # IMPORTS DES MODULES UTILITAIRES ET DATA
 # =============================================================================
-from utils.market_utils import discover_markets, get_live_ticker_data, 
-from utils.ui_utils import display_kpi_card, load_css
-from utils.metrics import calculate_metrics, calculate_period_return
-from utils.math_utils import trim_flat_start
-from utils.mlflow_utils import get_champion_metrics
+from src.utils.market_utils import get_live_ticker_data, discover_markets
+from src.utils.ui_utils import display_kpi_card, load_css
+from src.utils.metrics import calculate_metrics, calculate_period_return
+from src.utils.math_utils import trim_flat_start
+from src.utils.mlflow_utils import get_champion_metrics
 from src.extract.data_loader import load_all_data
+
 
 # =============================================================================
 # CONFIGURATION & STYLE
@@ -53,7 +55,25 @@ MODEL_DIR = BASE_DIR / "models"
 # Chargement du style CSS personnalisé
 load_css()
 
-MARKET_OPTIONS = discover_markets()
+
+def _load_fallback_markets(base_dir: Path) -> list:
+    cfg_path = base_dir / "config" / "markets.json"
+    if cfg_path.exists():
+        with open(cfg_path) as f:
+            return json.load(f)
+    return []
+
+
+MARKET_OPTIONS = discover_markets(
+    repo_id=HF_REPO_ID,
+    token=HF_TOKEN,
+    local_dir=BASE_DIR / "data" / "processed",
+    fallback=_load_fallback_markets(BASE_DIR),
+)
+
+if not MARKET_OPTIONS:
+    st.error("Aucun marché disponible : vérifiez HF_REPO_ID, HF_TOKEN, data/processed, ou config/markets.json.")
+    st.stop()
 
 
 # =============================================================================
@@ -66,8 +86,6 @@ st.sidebar.caption("Quantitative Asset Allocation")
 selected_market = st.sidebar.selectbox("Marché", MARKET_OPTIONS, index=0)
 
 with st.spinner(f"Loading {selected_market} data..."):
-    # APPEL MIS À JOUR : On passe HF_REPO_ID pour correspondre à votre def load_all_data(market, hf_repo_id)
-    # Note: Assurez-vous que la fonction retourne bien 4 éléments (ou modifiez le déballage si elle n'en retourne que 3)
     df_hist, df_signals, df_rebalance, load_errors = load_all_data(selected_market, HF_REPO_ID)
 
 if st.sidebar.button("Force Sync Pipeline"):
@@ -126,7 +144,6 @@ if ticker_val_path.exists():
 
 st.sidebar.markdown("---")
 
-# Affichage des erreurs éventuelles si la fonction retourne des erreurs
 if load_errors:
     with st.sidebar.expander("Data Issues", expanded=False):
         for err in load_errors:
@@ -171,7 +188,7 @@ if page == "Dashboard":
 
         df_c = trim_flat_start(df_hist)
         end = df_c.index[-1]
-        
+
         zoom_map = {"1M": 30, "3M": 90, "6M": 180, "1Y": 365}
         if p_sel in zoom_map:
             start = end - timedelta(days=zoom_map[p_sel])
@@ -179,7 +196,7 @@ if page == "Dashboard":
             start = datetime(end.year, 1, 1)
         else:
             start = df_c.index[0]
-            
+
         start = max(start, df_c.index[0])
         df_c = df_c[df_c.index >= pd.Timestamp(start)]
         df_base = df_c.apply(lambda x: x / x.iloc[0] * 100)
@@ -322,7 +339,11 @@ elif page == "Model Details":
         """)
         st.markdown("---")
 
-        champ = get_champion_metrics(selected_market)
+        champ = get_champion_metrics(
+            selected_market,
+            model_dir=MODEL_DIR,
+            mlflow_enabled=MLFLOW_ENABLED,
+        )
 
         if champ["source"] == "mlflow":
             st.markdown(
