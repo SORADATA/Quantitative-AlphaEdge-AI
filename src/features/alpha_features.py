@@ -16,12 +16,14 @@ from src.utils.feature_utils import compute_atr, compute_macd
 from src.utils.math_utils import _safe_div, _rolling_sortino, _rolling_maxdrawdown
 from src.utils.logger import setup_logger
 
+
 logger = setup_logger("alpha_features")
 
 
 # ══════════════════════════════════════════════════════════════════
 # CALCULS DES FEATURES
 # ══════════════════════════════════════════════════════════════════
+
 
 def _add_momentum_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["return_1m"] = g["adj close"].transform(lambda x: x.pct_change(1))
@@ -106,6 +108,7 @@ def add_rank_features(df: pd.DataFrame) -> pd.DataFrame:
 #  FONCTIONS PRINCIPALES
 # ══════════════════════════════════════════════════════════════════
 
+
 def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("Computing daily technical indicators...")
     if all(col in df.columns for col in ["high", "low", "open", "adj close"]):
@@ -162,8 +165,9 @@ def get_fama_french_betas(data: pd.DataFrame, ff_region: str) -> pd.DataFrame:
 
 def add_all_features(df: pd.DataFrame, market_config: dict) -> pd.DataFrame:
     if not isinstance(df.index, pd.MultiIndex): raise ValueError("MultiIndex requis.")
-    # Recuperation de la région : EU_5_factors par defaut
-    ff_region = market_config.get("ff_region", "Europe_5_Factors")
+    if "ff_region" not in market_config:
+        raise ValueError("ff_region manquant dans market_config — vérifiez le fichier de config du marché.")
+    ff_region = market_config["ff_region"]
     df = get_fama_french_betas(df.copy(), ff_region)
     g = df.groupby(level="ticker")
     logger.info("Computing alpha features...")
