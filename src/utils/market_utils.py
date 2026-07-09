@@ -1,3 +1,4 @@
+
 """
 Market Utils
 =============
@@ -7,7 +8,7 @@ Fonctions :
   - get_benchmark_returns() : télécharge et reindex les rendements du benchmark
   - build_export_df()       : formate le snapshot journalier pour l'export HF
 """
-
+from pathlib import Path
 import time
 import pandas as pd
 import yfinance as yf
@@ -202,3 +203,72 @@ def build_export_df(
     export = export.sort_values("Proba_Hausse (%)", ascending=False).reset_index(drop=True)
 
     return export
+
+# ══════════════════════════════════════════════════════════════════
+# DONNÉES TEMPS RÉEL (Data Explorer)
+# ══════════════════════════════════════════════════════════════════
+
+
+def get_live_ticker_data(ticker: str, period: str = "1y") -> pd.DataFrame:
+    """
+    Télécharge l'historique OHLCV d'un ticker via yfinance, avec retry
+    et normalisation des colonnes (lowercase, gestion MultiIndex,
+    fallback adj close -> close).
+    """
+    for attempt in range(1, 4):
+        try:
+            df = yf.download(ticker, period=period, progress=False, timeout=10)
+            if not df.empty:
+                df.columns = (
+                    df.columns.get_level_values(0)
+                    if isinstance(df.columns, pd.MultiIndex)
+                    else df.columns
+                )
+                df.columns = df.columns.str.lower()
+                if "adj close" not in df.columns and "close" in df.columns:
+                    df["adj close"] = df["close"]
+                return df
+            logger.warning(f"Réponse vide pour {ticker} (tentative {attempt}/3)")
+            time.sleep(2)
+        except Exception as e:
+            logger.warning(f"Erreur téléchargement {ticker} (tentative {attempt}/3) : {e}")
+            time.sleep(2)
+
+    logger.error(f"Impossible de charger {ticker} après 3 tentatives.")
+    return pd.DataFrame()
+
+
+# ══════════════════════════════════════════════════════════════════
+# DÉCOUVERTE DES MARCHÉS DISPONIBLES
+# ══════════════════════════════════════════════════════════════════
+
+def discover_markets(
+    repo_id: str,
+    token: str = None,
+    local_dir: Path = None,
+    fallback: list = None,
+) -> list:
+    """
+    Découvre les marchés disponibles en interrogeant le repo HF distant
+    (dataset repo_id, prefixe data/<MARKET>/). Fallback sur un scan local
+    (local_dir) si l'API HF échoue, puis sur `fallback` en dernier recours.
+    """
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        files = api.list_repo_files(repo_id=repo_id, repo_type="dataset", token=token)
+        markets = sorted({
+            f.split("/")[1] for f in files
+            if f.startswith("data/") and len(f.split("/")) > 2
+        })
+        if markets:
+            return markets
+    except Exception as e:
+        logger.warning(f"Découverte HF échouée pour {repo_id} : {e}")
+
+    if local_dir and local_dir.exists():
+        found = sorted([p.name for p in local_dir.iterdir() if p.is_dir()])
+        if found:
+            return found
+
+    return fallback or ["CAC40", "BRVM"]
