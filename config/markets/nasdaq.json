@@ -1,0 +1,17 @@
+{
+    "market_name": "NASDAQ100",
+    "benchmark_ticker": "^NDX",
+    "tickers": [
+        "AAPL", "MSFT", "AMZN", "NVDA", "META", "TSLA", "GOOGL", "GOOG", "AVGO", "PEP",
+        "COST", "ADBE", "CSCO", "NFLX", "AMD", "TMUS", "QCOM", "INTC", "TXN", "INTU",
+        "AMGN", "AMAT", "HON", "ISRG", "BKNG", "SBUX", "MDLZ", "GILD", "ADP", "VRTX",
+        "ADI", "REGN", "PANW", "SNPS", "KLAC", "CDNS", "MU", "MELI", "PYPL", "CHTR",
+        "CSX", "MAR", "ORLY", "MNST", "ABNB", "ASML", "LRCX", "CTAS", "NXPI", "FTNT",
+        "PCAR", "DXCM", "KDP", "PAYX", "MCHP", "EXC", "KHC", "CRWD", "ROST", "IDXX",
+        "ODFL", "EA", "CTSH", "FAST", "BIIB", "CEG", "VRSK", "WBD", "ILMN", "SIRI",
+        "DDOG", "TEAM", "WDAY", "ZS", "PDD", "LULU", "MRVL", "CPRT", "DLTR", "EBAY",
+        "BKR", "GFS", "ANSS", "TTWO", "FANG", "WBA", "MDB", "ENPH", "ALGN", "BMRN",
+        "SGEN", "SPLK", "VRSN", "CDW", "CHKP", "PTC", "EXPE", "NTES", "JD", "LNT"
+    ],
+    "ff_region": "North_America_5_Factors"
+}
