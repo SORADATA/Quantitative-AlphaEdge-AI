@@ -31,6 +31,7 @@ from src.models.ensemble import AlphaEdgeEnsemble
 from src.utils.logger import setup_logger
 from src.utils.metrics import calculate_financial_metrics
 
+
 load_dotenv()
 warnings.filterwarnings("ignore")
 logger = setup_logger("train")
@@ -145,12 +146,14 @@ def _load_market_dataset(market_name: str) -> pd.DataFrame:
     return df.dropna(subset=["target", "future_return"])
 
 
-def _train_test_split_by_date(df: pd.DataFrame, test_months: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _train_test_split_by_date(
+    df: pd.DataFrame, test_months: int, market_config: dict
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split temporel (pas de shuffle) : les `test_months` derniers mois servent de test set."""
     dates = df.index.get_level_values("date")
     split_date = dates.max() - pd.DateOffset(months=test_months)
-    df_train = add_all_features(df[dates <= split_date].copy())
-    df_test = add_all_features(df[dates > split_date].copy())
+    df_train = add_all_features(df[dates <= split_date].copy(), market_config)
+    df_test = add_all_features(df[dates > split_date].copy(), market_config)
     return df_train, df_test
 
 
@@ -318,12 +321,13 @@ def _log_and_promote_to_mlflow(
 # PIPELINE D'ENTRAÎNEMENT
 # =============================================================================
 
-def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
+def train_pipeline(market_config: dict) -> tuple[AlphaEdgeEnsemble, dict]:
     """Entraîne, évalue et (le cas échéant) promeut le modèle d'un marché donné."""
+    market_name = market_config["market_name"]
     logger.info(f"Début de l'entraînement — {market_name}")
 
     df = _load_market_dataset(market_name)
-    df_train, df_test = _train_test_split_by_date(df, TEST_SET_MONTHS)
+    df_train, df_test = _train_test_split_by_date(df, TEST_SET_MONTHS, market_config)
 
     if len(df_train) < MIN_TRAIN_ROWS:
         raise ValueError(f"Volume de données insuffisant pour {market_name} : {len(df_train)} lignes.")
@@ -368,18 +372,20 @@ def train_pipeline(market_name: str) -> tuple[AlphaEdgeEnsemble, dict]:
 # ORCHESTRATEUR
 # =============================================================================
 
-def _load_configured_markets(config_dir: Path) -> list[str]:
-    """Lit les noms de marchés à partir des fichiers de configuration JSON."""
-    markets = []
+def _load_configured_markets(config_dir: Path) -> list[dict]:
+    """Lit les fichiers de configuration JSON et retourne les configs complètes."""
+    configs = []
     for config_file in sorted(config_dir.glob("*.json")):
         with open(config_file, encoding="utf-8") as f:
             market_cfg = json.load(f)
-        market = market_cfg.get("market_name")
-        if market:
-            markets.append(market)
-        else:
+        if not market_cfg.get("market_name"):
             logger.warning(f"Fichier de config sans 'market_name' ignoré : {config_file}")
-    return markets
+            continue
+        if not market_cfg.get("ff_region"):
+            logger.warning(f"Fichier de config sans 'ff_region' ignoré : {config_file}")
+            continue
+        configs.append(market_cfg)
+    return configs
 
 
 def main() -> None:
@@ -388,15 +394,16 @@ def main() -> None:
         logger.error(f"Dossier de configs introuvable : {config_dir}")
         raise SystemExit(1)
 
-    markets = _load_configured_markets(config_dir)
-    if not markets:
+    market_configs = _load_configured_markets(config_dir)
+    if not market_configs:
         logger.error(f"Aucun marché configuré trouvé dans {config_dir}")
         raise SystemExit(1)
 
     failures = []
-    for market in markets:
+    for market_config in market_configs:
+        market = market_config["market_name"]
         try:
-            train_pipeline(market)
+            train_pipeline(market_config)
         except Exception:
             logger.critical(f"[{market}] Échec complet de l'entraînement", exc_info=True)
             failures.append(market)
