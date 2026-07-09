@@ -87,10 +87,10 @@ def _build_price_matrix(df_daily: pd.DataFrame, ffill_limit: int = MAX_PRICE_FFI
     return df_daily[col].unstack().ffill(limit=ffill_limit)
 
 
-def _build_daily_snapshot(df_daily: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Timestamp]:
+def _build_daily_snapshot(df_daily: pd.DataFrame, market_config: dict) -> Tuple[pd.DataFrame, pd.Timestamp]:
     last_date = df_daily.index.get_level_values("date").max()
     lookback_df = df_daily.iloc[-252:].copy()
-    df_feat = add_all_features(lookback_df)
+    df_feat = add_all_features(lookback_df, market_config)
     return df_feat.xs(last_date, level="date").copy(), last_date
 
 
@@ -127,12 +127,12 @@ def _simulate_period(allocation, drifted_allocation, trading_days, daily_returns
     return pd.DataFrame({"Strategy": strategy_values, "Benchmark": bench_values, "N_Stocks": len(tickers)}, index=trading_days), final_total, float(bench_values[-1]), new_drifted
 
 
-def backtest_strategy_with_rebalancing(df_daily, df_monthly, model, benchmark_ticker):
+def backtest_strategy_with_rebalancing(df_daily, df_monthly, model, benchmark_ticker, market_config):
     # Masque de warm-up calcule AVANT le calcul des features (sur les donnees
     # brutes), pour ne pas dependre du fillna(0) interne a add_all_features.
     valid_history_mask = _filter_warmup_period(df_monthly)
 
-    df_monthly_feat = add_all_features(df_monthly.copy())
+    df_monthly_feat = add_all_features(df_monthly.copy(), market_config)
     df_monthly_feat = df_monthly_feat[valid_history_mask.reindex(df_monthly_feat.index, fill_value=False)]
 
     n_dropped = int((~valid_history_mask).sum())
@@ -176,8 +176,8 @@ def backtest_strategy_with_rebalancing(df_daily, df_monthly, model, benchmark_ti
     return pd.concat(period_frames), pd.DataFrame(rebalance_log).set_index("Date"), {}
 
 
-def generate_live_signals(df_daily, daily_prices, model, rebalance_history):
-    snapshot, last_date = _build_daily_snapshot(df_daily)
+def generate_live_signals(df_daily, daily_prices, model, rebalance_history, market_config):
+    snapshot, last_date = _build_daily_snapshot(df_daily, market_config)
     snapshot["proba_upside"] = _score_with_model(model, snapshot)
     tickers = snapshot[snapshot["proba_upside"] >= PROBA_MIN].sort_values("proba_upside", ascending=False).head(MAX_STOCKS_SELECT).index.tolist()
     allocation = {}
