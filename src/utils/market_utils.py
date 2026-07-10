@@ -272,3 +272,54 @@ def discover_markets(
             return found
 
     return fallback or ["CAC40", "BRVM"]
+
+
+# ══════════════════════════════════════════════════════════════════
+# DEVISE PAR TICKER (suffixe yfinance -> devise / symbole)
+# ══════════════════════════════════════════════════════════════════
+_SUFFIX_CURRENCY_MAP = {
+    "":      ("USD", "$"),      # pas de suffixe = US (AAPL, TSLA...)
+    ".PA":   ("EUR", "€"),      # Paris
+    ".DE":   ("EUR", "€"),      # Francfort
+    ".AS":   ("EUR", "€"),      # Amsterdam
+    ".MI":   ("EUR", "€"),      # Milan
+    ".KS":   ("KRW", "₩"),      # Corée (KOSPI)
+    ".KQ":   ("KRW", "₩"),      # Corée (KOSDAQ)
+    ".HK":   ("HKD", "HK$"),    # Hong Kong
+    ".SS":   ("CNY", "¥"),      # Shanghai
+    ".SZ":   ("CNY", "¥"),      # Shenzhen
+    ".NS":   ("INR", "₹"),      # Inde (NSE)
+    ".BO":   ("INR", "₹"),      # Inde (BSE)
+    ".SA":   ("BRL", "R$"),     # Brésil
+    ".IS":   ("TRY", "₺"),      # Turquie
+    ".JO":   ("ZAR", "R"),      # Afrique du Sud
+    ".MX":   ("MXN", "MX$"),    # Mexique
+    ".TW":   ("TWD", "NT$"),    # Taïwan
+    ".TWO":  ("TWD", "NT$"),    # Taïwan (OTC)
+    ".KL":   ("MYR", "RM"),     # Malaisie
+    ".BK":   ("THB", "฿"),      # Thaïlande
+}
+
+
+def get_ticker_currency(ticker: str, default: tuple = ("EUR", "€")) -> tuple:
+    """
+    Déduit la devise d'un ticker à partir de son suffixe yfinance.
+
+    Parameters
+    ----------
+    ticker : str — ex: "AI.PA", "005930.KS", "AAPL"
+    default : tuple — (code, symbole) utilisé si le suffixe est inconnu
+
+    Returns
+    -------
+    tuple — (code_devise, symbole) ex: ("EUR", "€")
+    """
+    ticker = str(ticker).strip()
+    if "." in ticker:
+        suffix = "." + ticker.split(".")[-1]
+        if suffix in _SUFFIX_CURRENCY_MAP:
+            return _SUFFIX_CURRENCY_MAP[suffix]
+        logger.warning(f"Suffixe inconnu pour {ticker} ({suffix}), devise par defaut utilisée")
+        return default
+    return _SUFFIX_CURRENCY_MAP[""]
+
