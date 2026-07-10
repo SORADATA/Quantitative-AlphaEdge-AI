@@ -20,12 +20,13 @@ from mlflow.exceptions import MlflowException
 # =============================================================================
 # IMPORTS DES MODULES UTILITAIRES ET DATA
 # =============================================================================
-from src.utils.market_utils import get_live_ticker_data, discover_markets
+from src.utils.market_utils import get_live_ticker_data, discover_markets, get_ticker_currency
 from src.utils.ui_utils import display_kpi_card, load_css
 from src.utils.metrics import calculate_metrics, calculate_period_return
 from src.utils.math_utils import trim_flat_start
 from src.utils.mlflow_utils import get_champion_metrics
 from src.extract.data_loader import load_all_data
+from src.utils.config_loader import get_ticker_names, apply_ticker_names
 
 
 # =============================================================================
@@ -164,20 +165,30 @@ if page == "Dashboard":
     if not df_hist.empty:
         tot_ret, alpha, sharpe, max_dd, recovery_days = calculate_metrics(df_hist)
         c1, c2, c3, c4, c5 = st.columns(5)
-        with c1: display_kpi_card("Total Return", tot_ret, color_code=True)
-        with c2: display_kpi_card("Alpha vs Bench", alpha, color_code=True)
-        with c3: display_kpi_card("Sharpe Ratio", sharpe, is_percent=False)
-        with c4: display_kpi_card("Max Drawdown", max_dd, color_code=True)
-        with c5: display_kpi_card("Recovery Time", recovery_days, is_percent=False, suffix=" j", minimal=False)
+        with c1:
+            display_kpi_card("Total Return", tot_ret, color_code=True)
+        with c2:
+            display_kpi_card("Alpha vs Bench", alpha, color_code=True)
+        with c3:
+            display_kpi_card("Sharpe Ratio", sharpe, is_percent=False)
+        with c4:
+            display_kpi_card("Max Drawdown", max_dd, color_code=True)
+        with c5:
+            display_kpi_card("Recovery Time", recovery_days, is_percent=False, suffix=" j", minimal=False)
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("Period Performance")
         k1, k2, k3, k4, k5 = st.columns(5)
-        with k1: display_kpi_card("YTD", calculate_period_return(df_hist, ytd=True), color_code=True, minimal=True)
-        with k2: display_kpi_card("6 Months", calculate_period_return(df_hist, days=180), color_code=True, minimal=True)
-        with k3: display_kpi_card("3 Months", calculate_period_return(df_hist, days=90), color_code=True, minimal=True)
-        with k4: display_kpi_card("1 Month", calculate_period_return(df_hist, days=30), color_code=True, minimal=True)
-        with k5: display_kpi_card("Daily Return", calculate_period_return(df_hist, daily=True), color_code=True, minimal=True)
+        with k1:
+            display_kpi_card("YTD", calculate_period_return(df_hist, ytd=True), color_code=True, minimal=True)
+        with k2:
+            display_kpi_card("6 Months", calculate_period_return(df_hist, days=180), color_code=True, minimal=True)
+        with k3:
+            display_kpi_card("3 Months", calculate_period_return(df_hist, days=90), color_code=True, minimal=True)
+        with k4:
+            display_kpi_card("1 Month", calculate_period_return(df_hist, days=30), color_code=True, minimal=True)
+        with k5:
+            display_kpi_card("Daily Return", calculate_period_return(df_hist, daily=True), color_code=True, minimal=True)
 
         st.markdown("---")
         col_title, col_filter = st.columns([2, 1])
@@ -221,30 +232,28 @@ if page == "Dashboard":
         with c_pie:
             st.subheader("Current Allocation")
             if not df_signals.empty and "Allocation" in df_signals.columns:
+                ticker_names = get_ticker_names(selected_market, BASE_DIR)
                 active = df_signals[df_signals["Allocation"] > 0.001].copy()
+                active = apply_ticker_names(active, ticker_names)
                 cash = max(0, 1.0 - active["Allocation"].sum())
                 if cash > 0.001:
-                    final = pd.concat([active, pd.DataFrame([{"Ticker": "CASH", "Allocation": cash}])], ignore_index=True)
+                    final = pd.concat([active, pd.DataFrame([{"Ticker": "CASH", "Name": "CASH", "Allocation": cash}])], ignore_index=True)
                 else:
                     final = active
-                fig_p = px.pie(final, values="Allocation", names="Ticker", hole=0.5, color_discrete_sequence=px.colors.qualitative.Prism)
+                fig_p = px.pie(final, values="Allocation", names="Name", hole=0.5, color_discrete_sequence=px.colors.qualitative.Prism)
                 fig_p.update_traces(textposition="outside", textinfo="percent+label")
                 fig_p.update_layout(template="plotly_dark", margin=dict(l=20, r=20, t=0, b=0), showlegend=False, height=370)
                 st.plotly_chart(fig_p, use_container_width=True)
             else:
                 st.info("Waiting for signals...")
-    else:
-        st.warning(f"No data available for {selected_market} from Hugging Face.")
-
-
 # =============================================================================
 # PAGE 2 : DAILY SIGNALS
 # =============================================================================
-
 elif page == "Daily Signals":
     st.title(f"Daily Trading Signals - {selected_market}")
     if not df_signals.empty:
-        d = df_signals.copy()
+        ticker_names = get_ticker_names(selected_market, BASE_DIR)
+        d = apply_ticker_names(df_signals, ticker_names)
         if "Allocation" in d.columns:
             d = d.sort_values("Allocation", ascending=False)
         col_filter1, col_filter2 = st.columns([1, 3])
@@ -274,18 +283,25 @@ elif page == "Daily Signals":
     else:
         st.info(f"No signals available for {selected_market}.")
 
-
 # =============================================================================
 # PAGE 3 : DATA EXPLORER
 # =============================================================================
-
 elif page == "Data Explorer":
     st.title("Market Data Explorer")
     default_tickers = ["AI.PA", "AIR.PA", "BNP.PA", "MC.PA", "OR.PA", "TTE.PA"]
     tickers = df_signals["Ticker"].unique().tolist() if not df_signals.empty and "Ticker" in df_signals.columns else default_tickers
+
+    ticker_names = get_ticker_names(selected_market, BASE_DIR)
+
+    def format_ticker(t):
+        name = ticker_names.get(t)
+        return f"{t} — {name}" if name else t
+
     col_sel1, col_sel2 = st.columns([1, 3])
     with col_sel1:
-        selected_ticker = st.selectbox("Select Asset", tickers, index=0)
+        selected_ticker = st.selectbox("Select Asset", tickers, index=0, format_func=format_ticker)
+        currency_code, currency_symbol = get_ticker_currency(selected_ticker)
+        st.caption(f"Devise : {currency_code}")
     with col_sel2:
         period_exp = st.selectbox("Timeframe", ["1 Month", "3 Months", "6 Months", "1 Year", "5 Years"], index=2)
     yf_period_map = {"1 Month": "1mo", "3 Months": "3mo", "6 Months": "6mo", "1 Year": "1y", "5 Years": "5y"}
@@ -302,7 +318,7 @@ elif page == "Data Explorer":
             last_close = daily_var = total_ret_period = volatility = 0
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            display_kpi_card("Last Price", last_close, is_percent=False, prefix="€ ")
+            display_kpi_card("Last Price", last_close, is_percent=False, prefix=f"{currency_symbol} ")
         with m2:
             display_kpi_card("Daily Change", daily_var, color_code=True)
         with m3:
@@ -320,7 +336,6 @@ elif page == "Data Explorer":
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning(f"No data for {selected_ticker}")
-
 
 # =============================================================================
 # PAGE 4 : MODEL DETAILS
