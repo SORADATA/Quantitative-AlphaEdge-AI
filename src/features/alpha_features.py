@@ -21,7 +21,7 @@ logger = setup_logger("alpha_features")
 
 
 # ══════════════════════════════════════════════════════════════════
-# 1. CALCULS DES FEATURES (Logique métier)
+# CALCULS DES FEATURES
 # ══════════════════════════════════════════════════════════════════
 
 
@@ -68,6 +68,7 @@ def _add_tail_risk_factors(df: pd.DataFrame, g) -> pd.DataFrame:
     df["return_skew_6m"] = g["return_1m"].transform(lambda x: x.rolling(6, min_periods=3).skew())
     df["return_kurt_6m"] = g["return_1m"].transform(lambda x: x.rolling(6, min_periods=3).kurt())
     df["hist_var_5pct"] = g["return_1m"].transform(lambda x: x.rolling(12, min_periods=6).quantile(0.05))
+
     def _cvar(r: np.ndarray) -> float:
         t = np.quantile(r, 0.05); tail = r[r <= t]
         return tail.mean() if len(tail) > 0 else np.nan
@@ -78,6 +79,7 @@ def _add_tail_risk_factors(df: pd.DataFrame, g) -> pd.DataFrame:
 def _add_technical_enrichment(df: pd.DataFrame, g) -> pd.DataFrame:
     if "rsi" in df.columns:
         df["rsi_divergence"] = g["adj close"].transform(lambda x: x.pct_change(3)) - g["rsi"].transform(lambda x: x.pct_change(3))
+
     if "euro_volume" in df.columns:
         df["amihud_illiquidity"] = _safe_div(df["return_1m"].abs(), df["euro_volume"])
         df["volume_trend_3m"] = g["euro_volume"].transform(lambda x: x.pct_change(3))
@@ -103,7 +105,7 @@ def add_rank_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 2. FONCTIONS PRINCIPALES (Exposées)
+#  FONCTIONS PRINCIPALES
 # ══════════════════════════════════════════════════════════════════
 
 
@@ -128,12 +130,13 @@ def compute_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
-    logger.info("Retrieving Fama-French factors...")
+# INJECTION DYNAMIQUE DE LA RÉGION FAMA-FRENCH
+def get_fama_french_betas(data: pd.DataFrame, ff_region: str) -> pd.DataFrame:
+    logger.info(f"Retrieving Fama-French factors for region: {ff_region}...")
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=".*date_parser.*")
-            factor_data = web.DataReader("Europe_5_Factors", "famafrench", start="2010")[0].drop("RF", axis=1)
+            factor_data = web.DataReader(ff_region, "famafrench", start="2010")[0].drop("RF", axis=1)
         factor_data.index = pd.to_datetime(factor_data.index.to_timestamp()).tz_localize(None)
         factor_data = factor_data.resample("BME").last().div(100)
         factor_data.index.name = "date"
@@ -152,16 +155,20 @@ def get_fama_french_betas(data: pd.DataFrame) -> pd.DataFrame:
         if betas_list:
             betas_df = pd.concat(betas_list).set_index("ticker", append=True)
             data = data.join(betas_df.groupby("ticker").shift())
-            data[FAMA_FRENCH_FACTORS] = data.groupby(level="ticker", group_keys=False)[FAMA_FRENCH_FACTORS].transform(lambda x: x.fillna(x.mean()))
+            data[FAMA_FRENCH_FACTORS] = data.groupby(
+                level="ticker", group_keys=False)[FAMA_FRENCH_FACTORS].transform(lambda x: x.fillna(x.mean()))
             return data
     except Exception as exc:
         logger.warning(f"Fama-French retrieval failed ({exc}).")
     return data.assign(**{f: 0.0 for f in FAMA_FRENCH_FACTORS})
 
 
-def add_all_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_all_features(df: pd.DataFrame, market_config: dict) -> pd.DataFrame:
     if not isinstance(df.index, pd.MultiIndex): raise ValueError("MultiIndex requis.")
-    df = get_fama_french_betas(df.copy())
+    if "ff_region" not in market_config:
+        raise ValueError("ff_region manquant dans market_config — vérifiez le fichier de config du marché.")
+    ff_region = market_config["ff_region"]
+    df = get_fama_french_betas(df.copy(), ff_region)
     g = df.groupby(level="ticker")
     logger.info("Computing alpha features...")
     df = _add_momentum_factors(df, g)

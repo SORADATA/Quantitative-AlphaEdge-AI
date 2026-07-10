@@ -1,20 +1,33 @@
 import os
 import json
 import time
+from pathlib import Path
+from datetime import datetime, timedelta
+
 import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from pathlib import Path
-from datetime import datetime, timedelta
 from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 import yfinance as yf
-
 import mlflow
 from mlflow.tracking import MlflowClient
 from mlflow.exceptions import MlflowException
+
+
+# =============================================================================
+# IMPORTS DES MODULES UTILITAIRES ET DATA
+# =============================================================================
+from src.utils.market_utils import get_live_ticker_data, discover_markets, get_ticker_currency
+from src.utils.ui_utils import display_kpi_card, load_css
+from src.utils.metrics import calculate_metrics, calculate_period_return
+from src.utils.math_utils import trim_flat_start
+from src.utils.mlflow_utils import get_champion_metrics
+from src.extract.data_loader import load_all_data
+from src.utils.config_loader import get_ticker_names, apply_ticker_names
+
 
 # =============================================================================
 # CONFIGURATION & STYLE
@@ -40,310 +53,28 @@ if MLFLOW_ENABLED:
 
 MODEL_DIR = BASE_DIR / "models"
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def _discover_markets():
-    """
-    Decouvre dynamiquement les marches disponibles en interrogeant le repo
-    Hugging Face distant (dataset HF_REPO_ID), sous le prefixe data/<MARKET>/.
-    Fallback sur un scan local (data/processed) si l'API HF echoue, puis sur
-    une liste par defaut en dernier recours.
-    """
-    try:
-        from huggingface_hub import HfApi
-        api = HfApi()
-        files = api.list_repo_files(repo_id=HF_REPO_ID, repo_type="dataset", token=HF_TOKEN)
-        markets = sorted({
-            f.split("/")[1] for f in files
-            if f.startswith("data/") and len(f.split("/")) > 2
-        })
-        if markets:
-            return markets
-    except Exception:
-        pass
-
-    local_dir = BASE_DIR / "data" / "processed"
-    if local_dir.exists():
-        found = sorted([p.name for p in local_dir.iterdir() if p.is_dir()])
-        if found:
-            return found
-
-    return ["CAC40", "BRVM"]
-
-MARKET_OPTIONS = _discover_markets()
-
-st.markdown("""
-<style>
-    .main { background-color: #0E1117; }
-    .kpi-container {
-        background-color: #151922;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #262730;
-        text-align: left;
-    }
-    .kpi-minimal { text-align: left; padding: 10px 0; }
-    .kpi-label { font-size: 12px; color: #8b92a5; margin-bottom: 4px; }
-    .kpi-value { font-size: 24px; font-weight: 700; color: #ffffff; }
-    .kpi-delta-pos { color: #00cc96; font-size: 20px; font-weight: 600; }
-    .kpi-delta-neg { color: #ef553b; font-size: 20px; font-weight: 600; }
-    .disclaimer-box {
-        background-color: #1E1E1E;
-        color: #888888;
-        padding: 20px;
-        border-radius: 5px;
-        font-size: 12px;
-        border-top: 1px solid #333;
-        margin-top: 50px;
-        text-align: center;
-    }
-    .disclaimer-title {
-        color: #EF553B;
-        font-weight: bold;
-        margin-bottom: 10px;
-        font-size: 14px;
-        text-transform: uppercase;
-    }
-    .mlflow-badge {
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 12px;
-        font-size: 11px;
-        font-weight: 600;
-        margin-bottom: 10px;
-    }
-    .badge-champion { background-color: rgba(0, 204, 150, 0.15); color: #00CC96; }
-    .badge-fallback { background-color: rgba(255, 193, 7, 0.15); color: #FFC107; }
-</style>
-""", unsafe_allow_html=True)
+# Chargement du style CSS personnalisé
+load_css()
 
 
-# =============================================================================
-# CHARGEMENT DES DONNEES DEPUIS HUGGING FACE (par marche) - version robuste
-# =============================================================================
-
-@st.cache_data(ttl=600, show_spinner=False)
-def load_all_data(market: str):
-    """
-    Charge portfolio_history / latest_signals / rebalance_history pour un marche.
-    Version durcie : normalisation du nom de marche, chargement defensif
-    (safe_load) qui isole chaque fichier pour qu'une erreur sur l'un ne
-    bloque pas les autres, tout en conservant les controles metier
-    (colonnes manquantes, fraicheur des donnees) de la version precedente.
-    """
-    clean_market = str(market).strip()
-    base_url = f"https://huggingface.co/datasets/{HF_REPO_ID}/resolve/main/data/{clean_market}"
-
-    errors = []
-
-    def safe_load(url, key):
-        try:
-            df = pd.read_parquet(url)
-            if key in ["hist", "rebal"]:
-                df.index = pd.to_datetime(df.index, errors="coerce")
-                df = df[df.index.notna()].sort_index(ascending=(key == "hist"))
-            return df
-        except Exception as e:
-            errors.append(f"Error loading {key}: {e}")
-            return pd.DataFrame()
-
-    df_hist = safe_load(f"{base_url}/portfolio_history.parquet", "hist")
-    df_signals = safe_load(f"{base_url}/latest_signals.parquet", "signals")
-    df_rebalance = safe_load(f"{base_url}/rebalance_history.parquet", "rebal")
-
-    if not df_hist.empty:
-        days_old = (datetime.now() - df_hist.index[-1]).days
-        if days_old > 7:
-            errors.append(f"Portfolio data is {days_old} days old")
-
-    if not df_signals.empty:
-        missing = [c for c in ["Ticker", "Signal"] if c not in df_signals.columns]
-        if missing:
-            errors.append(f"Missing columns in signals: {missing}")
-
-    return df_hist, df_signals, df_rebalance, errors
+def _load_fallback_markets(base_dir: Path) -> list:
+    cfg_path = base_dir / "config" / "markets.json"
+    if cfg_path.exists():
+        with open(cfg_path) as f:
+            return json.load(f)
+    return []
 
 
-# =============================================================================
-# FONCTIONS UTILITAIRES - KPIs / MARCHE
-# =============================================================================
+MARKET_OPTIONS = discover_markets(
+    repo_id=HF_REPO_ID,
+    token=HF_TOKEN,
+    local_dir=BASE_DIR / "data" / "processed",
+    fallback=_load_fallback_markets(BASE_DIR),
+)
 
-def display_kpi_card(label, value, is_percent=True, color_code=False, prefix="", suffix="", minimal=False):
-    if pd.isna(value) or np.isinf(value):
-        html_val = '<span class="kpi-value">N/A</span>'
-    else:
-        if is_percent:
-            formatted_val = f"{prefix}{value:.1%}{suffix}"
-        elif isinstance(value, (int, np.integer)) or suffix:
-            formatted_val = f"{prefix}{int(value)}{suffix}"
-        else:
-            formatted_val = f"{prefix}{value:.2f}{suffix}"
-        if color_code:
-            color_class = "kpi-delta-pos" if value >= 0 else "kpi-delta-neg"
-            arrow = "▲" if value >= 0 else "▼"
-            html_val = f'<span class="{color_class}">{arrow} {formatted_val}</span>'
-        else:
-            html_val = f'<span class="kpi-value">{formatted_val}</span>'
-    css_class = "kpi-minimal" if minimal else "kpi-container"
-    st.markdown(f"""
-    <div class="{css_class}">
-        <div class="kpi-label">{label}</div>
-        {html_val}
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def calculate_metrics(df):
-    if df.empty or len(df) < 2:
-        return 0, 0, 0, 0, 0
-    try:
-        total_ret = (df["Strategy"].iloc[-1] / df["Strategy"].iloc[0]) - 1
-        bench_ret = (df["Benchmark"].iloc[-1] / df["Benchmark"].iloc[0]) - 1
-        alpha = total_ret - bench_ret
-        strategy_returns = df["Strategy"].pct_change().dropna()
-        sharpe = (strategy_returns.mean() / strategy_returns.std()) * np.sqrt(252) if strategy_returns.std() != 0 else 0
-        cum_ret = (1 + strategy_returns).cumprod()
-        running_max = cum_ret.cummax()
-        dd_series = (cum_ret - running_max) / running_max
-        max_dd = dd_series.min()
-        recovery_time = _compute_recovery_time(dd_series)
-        return total_ret, alpha, sharpe, max_dd, recovery_time
-    except Exception:
-        return 0, 0, 0, 0, 0
-
-
-def _compute_recovery_time(dd_series: pd.Series) -> int:
-    """
-    Calcule le nombre de jours écoulés depuis le point bas du dernier
-    drawdown significatif jusqu'au retour au plus haut (0). Si la
-    stratégie n'a pas encore récupéré, retourne le nombre de jours
-    depuis le point bas jusqu'à aujourd'hui (recovery en cours).
-    """
-    if dd_series.empty:
-        return 0
-    trough_idx = dd_series.idxmin()
-    post_trough = dd_series.loc[trough_idx:]
-    recovered = post_trough[post_trough >= -0.0001]
-    if len(recovered) > 1:
-        recovery_date = recovered.index[1]
-        return (recovery_date - trough_idx).days
-    return (dd_series.index[-1] - trough_idx).days
-
-
-def calculate_period_return(df, days=None, ytd=False, daily=False):
-    if df.empty or "Strategy" not in df.columns or len(df) < 2:
-        return 0.0
-    try:
-        if daily:
-            return (df["Strategy"].iloc[-1] / df["Strategy"].iloc[-2]) - 1
-        last_price, last_date = df["Strategy"].iloc[-1], df.index[-1]
-        if ytd:
-            target_date = datetime(last_date.year, 1, 1)
-        elif days:
-            target_date = last_date - timedelta(days=days)
-        else:
-            target_date = df.index[0]
-        if target_date < df.index[0]:
-            start_price = df["Strategy"].iloc[0]
-        else:
-            start_price = df["Strategy"].iloc[df.index.get_indexer([target_date], method="nearest")[0]]
-        return ((last_price / start_price) - 1) if start_price != 0 else 0.0
-    except Exception:
-        return 0.0
-
-
-def _trim_flat_start(df: pd.DataFrame, tol: float = 1e-6) -> pd.DataFrame:
-    """
-    Supprime la periode initiale "plate" (valeurs constantes, generalement un
-    placeholder egal a la valeur de base) presente au debut de certains
-    historiques, avant le premier rebalancement reel de la strategie.
-    On garde tout l'historique si aucune periode plate n'est detectee.
-    """
-    if df.empty or "Strategy" not in df.columns or len(df) < 3:
-        return df
-    changes = df["Strategy"].diff().abs() > tol
-    if "Benchmark" in df.columns:
-        changes = changes | (df["Benchmark"].diff().abs() > tol)
-    first_move = changes[changes].index
-    if len(first_move) == 0:
-        return df
-    start_idx = df.index.get_loc(first_move[0])
-    start_idx = max(0, start_idx - 1)
-    return df.iloc[start_idx:]
-
-
-@st.cache_data(ttl=3600)
-def get_live_ticker_data(ticker, period="1y"):
-    for _ in range(3):
-        try:
-            df = yf.download(ticker, period=period, progress=False, timeout=10)
-            if not df.empty:
-                df.columns = df.columns.get_level_values(0) if isinstance(df.columns, pd.MultiIndex) else df.columns
-                df.columns = df.columns.str.lower()
-                if "adj close" not in df.columns and "close" in df.columns:
-                    df["adj close"] = df["close"]
-                return df
-            time.sleep(2)
-        except Exception:
-            time.sleep(2)
-    return pd.DataFrame()
-
-
-# =============================================================================
-# FONCTIONS UTILITAIRES - MLFLOW (aligne sur train.py : alias "champion")
-# =============================================================================
-
-@st.cache_data(ttl=600, show_spinner=False)
-def get_champion_metrics(market: str):
-    """
-    Recupere les metriques du modele 'champion' pour un marche donne.
-    1) Essaie MLflow via l'alias 'champion'.
-    2) Si MLflow est indisponible ou qu'aucun alias 'champion' n'existe encore,
-       on retombe sur le model_card.json sauvegarde localement par train.py.
-    """
-    result = {
-        "source": None,
-        "metrics": {},
-        "version": None,
-        "run_id": None,
-        "promoted": None,
-        "error": None,
-    }
-    registered_model_name = f"AlphaEdge_Ensemble_{market}"
-
-    if MLFLOW_ENABLED:
-        try:
-            client = MlflowClient()
-            mv = client.get_model_version_by_alias(registered_model_name, "champion")
-            run = client.get_run(mv.run_id)
-            result["source"] = "mlflow"
-            result["metrics"] = run.data.metrics
-            result["version"] = mv.version
-            result["run_id"] = mv.run_id
-            result["promoted"] = True
-            return result
-        except MlflowException as e:
-            result["error"] = f"MLflow: {e}"
-        except Exception as e:
-            result["error"] = f"MLflow: {e}"
-
-    card_path = MODEL_DIR / market / "model_card.json"
-    if card_path.exists():
-        try:
-            with open(card_path, "r") as f:
-                card = json.load(f)
-            result["source"] = "local"
-            metrics = {}
-            for k, v in card.get("metrics_ml", {}).items():
-                metrics[f"ml_{k}"] = v
-            for k, v in card.get("metrics_fin", {}).items():
-                metrics[f"fin_{k}"] = v
-            result["metrics"] = metrics
-            result["promoted"] = card.get("mlflow", {}).get("promoted", False)
-            result["run_id"] = card.get("mlflow", {}).get("run_id")
-        except Exception as e:
-            result["error"] = (result["error"] + " | " if result["error"] else "") + f"model_card.json: {e}"
-
-    return result
+if not MARKET_OPTIONS:
+    st.error("Aucun marché disponible : vérifiez HF_REPO_ID, HF_TOKEN, data/processed, ou config/markets.json.")
+    st.stop()
 
 
 # =============================================================================
@@ -356,7 +87,7 @@ st.sidebar.caption("Quantitative Asset Allocation")
 selected_market = st.sidebar.selectbox("Marché", MARKET_OPTIONS, index=0)
 
 with st.spinner(f"Loading {selected_market} data..."):
-    df_hist, df_signals, df_rebalance, load_errors = load_all_data(selected_market)
+    df_hist, df_signals, df_rebalance, load_errors = load_all_data(selected_market, HF_REPO_ID)
 
 if st.sidebar.button("Force Sync Pipeline"):
     st.cache_data.clear()
@@ -466,58 +197,25 @@ if page == "Dashboard":
         with col_filter:
             p_sel = st.radio("Zoom:", ["1M", "3M", "6M", "YTD", "1Y", "ALL"], index=5, horizontal=True, label_visibility="collapsed")
 
-        df_c = _trim_flat_start(df_hist)
+        df_c = trim_flat_start(df_hist)
         end = df_c.index[-1]
-        if p_sel == "1M":
-            start = end - timedelta(days=30)
-        elif p_sel == "3M":
-            start = end - timedelta(days=90)
-        elif p_sel == "6M":
-            start = end - timedelta(days=180)
+
+        zoom_map = {"1M": 30, "3M": 90, "6M": 180, "1Y": 365}
+        if p_sel in zoom_map:
+            start = end - timedelta(days=zoom_map[p_sel])
         elif p_sel == "YTD":
             start = datetime(end.year, 1, 1)
-        elif p_sel == "1Y":
-            start = end - timedelta(days=365)
         else:
             start = df_c.index[0]
-        if start < df_c.index[0]:
-            start = df_c.index[0]
+
+        start = max(start, df_c.index[0])
         df_c = df_c[df_c.index >= pd.Timestamp(start)]
         df_base = df_c.apply(lambda x: x / x.iloc[0] * 100)
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_base.index, y=df_base["Benchmark"],
-            mode="lines", name="Benchmark",
-            line=dict(color="#8b92a5", width=1.3, dash="dot"),
-            hovertemplate="Benchmark: %{y:.1f}<extra></extra>"
-        ))
-        fig.add_trace(go.Scatter(
-            x=df_base.index, y=df_base["Strategy"],
-            mode="lines", name="Strategy",
-            line=dict(color="#2ED9A0", width=2),
-            hovertemplate="Strategy: %{y:.1f}<extra></extra>"
-        ))
-        fig.update_layout(
-            template="plotly_white",
-            plot_bgcolor="#11151c",
-            paper_bgcolor="#11151c",
-            font=dict(color="#c9ced6", size=12),
-            margin=dict(l=0, r=0, t=30, b=0),
-            height=400,
-            hovermode="x unified",
-            legend=dict(
-                orientation="h", y=1.12, x=1, xanchor="right",
-                bgcolor="rgba(0,0,0,0)", title=None,
-                font=dict(size=12)
-            ),
-            xaxis=dict(showgrid=False, showline=True, linecolor="#2a2f3a", ticks="outside", tickcolor="#2a2f3a"),
-            yaxis=dict(
-                title="Indexed Value (Base 100)", title_font=dict(size=11, color="#8b92a5"),
-                showgrid=True, gridcolor="rgba(255,255,255,0.06)", zeroline=False,
-                showline=False
-            )
-        )
+        fig.add_trace(go.Scatter(x=df_base.index, y=df_base["Benchmark"], mode="lines", name="Benchmark", line=dict(color="#8b92a5", width=1.3, dash="dot"), hovertemplate="Benchmark: %{y:.1f}<extra></extra>"))
+        fig.add_trace(go.Scatter(x=df_base.index, y=df_base["Strategy"], mode="lines", name="Strategy", line=dict(color="#2ED9A0", width=2), hovertemplate="Strategy: %{y:.1f}<extra></extra>"))
+        fig.update_layout(template="plotly_white", plot_bgcolor="#11151c", paper_bgcolor="#11151c", font=dict(color="#c9ced6", size=12), margin=dict(l=0, r=0, t=30, b=0), height=400, hovermode="x unified", legend=dict(orientation="h", y=1.12, x=1, xanchor="right", bgcolor="rgba(0,0,0,0)", title=None, font=dict(size=12)), xaxis=dict(showgrid=False, showline=True, linecolor="#2a2f3a", ticks="outside", tickcolor="#2a2f3a"), yaxis=dict(title="Indexed Value (Base 100)", title_font=dict(size=11, color="#8b92a5"), showgrid=True, gridcolor="rgba(255,255,255,0.06)", zeroline=False, showline=False))
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
@@ -528,43 +226,34 @@ if page == "Dashboard":
             cum = (1 + s_ret).cumprod()
             dd = (cum - cum.cummax()) / cum.cummax()
             fig_dd = go.Figure()
-            fig_dd.add_trace(go.Scatter(
-                x=dd.index, y=dd, fill="tozeroy", mode="lines",
-                line=dict(color="#EF553B", width=1.5),
-                name="Drawdown", fillcolor="rgba(239, 85, 59, 0.3)"
-            ))
-            fig_dd.update_layout(
-                template="plotly_dark", margin=dict(l=0, r=0, t=10, b=0),
-                height=320, yaxis_tickformat=".1%", yaxis_title="Drawdown"
-            )
+            fig_dd.add_trace(go.Scatter(x=dd.index, y=dd, fill="tozeroy", mode="lines", line=dict(color="#EF553B", width=1.5), name="Drawdown", fillcolor="rgba(239, 85, 59, 0.3)"))
+            fig_dd.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=10, b=0), height=320, yaxis_tickformat=".1%", yaxis_title="Drawdown")
             st.plotly_chart(fig_dd, use_container_width=True)
         with c_pie:
             st.subheader("Current Allocation")
             if not df_signals.empty and "Allocation" in df_signals.columns:
+                ticker_names = get_ticker_names(selected_market, BASE_DIR)
                 active = df_signals[df_signals["Allocation"] > 0.001].copy()
+                active = apply_ticker_names(active, ticker_names)
                 cash = max(0, 1.0 - active["Allocation"].sum())
                 if cash > 0.001:
-                    final = pd.concat([active, pd.DataFrame([{"Ticker": "CASH", "Allocation": cash}])], ignore_index=True)
+                    final = pd.concat([active, pd.DataFrame([{"Ticker": "CASH", "Name": "CASH", "Allocation": cash}])], ignore_index=True)
                 else:
                     final = active
-                fig_p = px.pie(final, values="Allocation", names="Ticker", hole=0.5, color_discrete_sequence=px.colors.qualitative.Prism)
+                fig_p = px.pie(final, values="Allocation", names="Name", hole=0.5, color_discrete_sequence=px.colors.qualitative.Prism)
                 fig_p.update_traces(textposition="outside", textinfo="percent+label")
                 fig_p.update_layout(template="plotly_dark", margin=dict(l=20, r=20, t=0, b=0), showlegend=False, height=370)
                 st.plotly_chart(fig_p, use_container_width=True)
             else:
                 st.info("Waiting for signals...")
-    else:
-        st.warning(f"No data available for {selected_market} from Hugging Face.")
-
-
 # =============================================================================
 # PAGE 2 : DAILY SIGNALS
 # =============================================================================
-
 elif page == "Daily Signals":
     st.title(f"Daily Trading Signals - {selected_market}")
     if not df_signals.empty:
-        d = df_signals.copy()
+        ticker_names = get_ticker_names(selected_market, BASE_DIR)
+        d = apply_ticker_names(df_signals, ticker_names)
         if "Allocation" in d.columns:
             d = d.sort_values("Allocation", ascending=False)
         col_filter1, col_filter2 = st.columns([1, 3])
@@ -594,18 +283,25 @@ elif page == "Daily Signals":
     else:
         st.info(f"No signals available for {selected_market}.")
 
-
 # =============================================================================
 # PAGE 3 : DATA EXPLORER
 # =============================================================================
-
 elif page == "Data Explorer":
     st.title("Market Data Explorer")
     default_tickers = ["AI.PA", "AIR.PA", "BNP.PA", "MC.PA", "OR.PA", "TTE.PA"]
     tickers = df_signals["Ticker"].unique().tolist() if not df_signals.empty and "Ticker" in df_signals.columns else default_tickers
+
+    ticker_names = get_ticker_names(selected_market, BASE_DIR)
+
+    def format_ticker(t):
+        name = ticker_names.get(t)
+        return f"{t} — {name}" if name else t
+
     col_sel1, col_sel2 = st.columns([1, 3])
     with col_sel1:
-        selected_ticker = st.selectbox("Select Asset", tickers, index=0)
+        selected_ticker = st.selectbox("Select Asset", tickers, index=0, format_func=format_ticker)
+        currency_code, currency_symbol = get_ticker_currency(selected_ticker)
+        st.caption(f"Devise : {currency_code}")
     with col_sel2:
         period_exp = st.selectbox("Timeframe", ["1 Month", "3 Months", "6 Months", "1 Year", "5 Years"], index=2)
     yf_period_map = {"1 Month": "1mo", "3 Months": "3mo", "6 Months": "6mo", "1 Year": "1y", "5 Years": "5y"}
@@ -622,7 +318,7 @@ elif page == "Data Explorer":
             last_close = daily_var = total_ret_period = volatility = 0
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            display_kpi_card("Last Price", last_close, is_percent=False, prefix="€ ")
+            display_kpi_card("Last Price", last_close, is_percent=False, prefix=f"{currency_symbol} ")
         with m2:
             display_kpi_card("Daily Change", daily_var, color_code=True)
         with m3:
@@ -641,9 +337,8 @@ elif page == "Data Explorer":
     else:
         st.warning(f"No data for {selected_ticker}")
 
-
 # =============================================================================
-# PAGE 4 : MODEL DETAILS (MLflow - alias "champion", fallback model_card.json)
+# PAGE 4 : MODEL DETAILS
 # =============================================================================
 
 elif page == "Model Details":
@@ -659,7 +354,11 @@ elif page == "Model Details":
         """)
         st.markdown("---")
 
-        champ = get_champion_metrics(selected_market)
+        champ = get_champion_metrics(
+            selected_market,
+            model_dir=MODEL_DIR,
+            mlflow_enabled=MLFLOW_ENABLED,
+        )
 
         if champ["source"] == "mlflow":
             st.markdown(

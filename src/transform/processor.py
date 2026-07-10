@@ -4,7 +4,6 @@ from typing import Tuple, List
 from const import VARS_TO_LAG, RESAMPLE_MEAN_COLS, RESAMPLE_LAST_EXCLUDE
 from src.features.alpha_features import (
     compute_technical_indicators,
-    get_fama_french_betas,
     add_all_features,
 )
 from src.transform.ticker_manager import validate_and_clean_tickers
@@ -22,10 +21,16 @@ class MarketDataProcessor:
     ----------
     active_tickers : list[str]
         Liste des tickers actifs sur le marché considéré.
+    ff_region : str
+        Région Fama-French à utiliser pour le calcul des betas
+        (ex: "Europe_5_Factors", "Emerging_5_Factors", "North_America_5_Factors").
     """
 
-    def __init__(self, active_tickers: List[str]):
+    def __init__(self, active_tickers: List[str], ff_region: str):
+        if not ff_region:
+            raise ValueError("ff_region est obligatoire — vérifiez le fichier de config du marché.")
         self.active_tickers = active_tickers
+        self.ff_region = ff_region
 
     # ── Agrégation mensuelle
     def _resample_to_monthly(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -66,16 +71,15 @@ class MarketDataProcessor:
         if "adj close" not in df.columns and "close" in df.columns:
             df["adj close"] = df["close"]
             logger.warning("adj close absent — utilisation de close comme proxy.")
-            
+
         df, valid_tickers, alerts = validate_and_clean_tickers(df, self.active_tickers)
         df = compute_technical_indicators(df)
 
         logger.info("Agrégation à la fréquence mensuelle...")
         df_monthly = self._resample_to_monthly(df)
 
-        # Calcul des features et facteurs
-        df_monthly = get_fama_french_betas(df_monthly)
-        df_monthly = add_all_features(df_monthly)
+        # Calcul des features et facteurs Fama-French (région dynamique)
+        df_monthly = add_all_features(df_monthly, {"ff_region": self.ff_region})
         df_monthly = self._apply_lags(df_monthly)
 
         n_features = df_monthly.shape[1]

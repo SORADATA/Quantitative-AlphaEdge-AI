@@ -10,12 +10,17 @@ from src.transform.processor import MarketDataProcessor
 from src.transform.ticker_manager import handle_ticker_changes
 from src.utils.logger import setup_logger
 
+
 logger = setup_logger("etl")
 
 
 def get_data_pipeline(market_config: dict) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     market_name = market_config["market_name"]
     tickers = market_config["tickers"]
+
+    if "ff_region" not in market_config:
+        logger.error(f"Abandon du pipeline pour {market_name} : 'ff_region' manquant dans la config.")
+        return None, None
 
     ticker_changes, delisted = handle_ticker_changes()
     active_tickers = [
@@ -28,7 +33,10 @@ def get_data_pipeline(market_config: dict) -> Tuple[Optional[pd.DataFrame], Opti
         logger.error(f"Abandon du pipeline pour {market_name} : aucune donnée extraite.")
         return None, None
 
-    processor = MarketDataProcessor(active_tickers=active_tickers)
+    processor = MarketDataProcessor(
+        active_tickers=active_tickers,
+        ff_region=market_config["ff_region"],
+    )
     df_daily, df_monthly, alerts = processor.process(raw)
 
     BASE_DIR.mkdir(parents=True, exist_ok=True)

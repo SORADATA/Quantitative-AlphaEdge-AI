@@ -17,6 +17,7 @@ from src.pipeline.backtest import (
 from src.models.model_loader import load_champion
 from const import BACKTEST_YEARS
 
+
 # =============================================================================
 # CONFIGURATION GLOBALE
 # =============================================================================
@@ -24,6 +25,7 @@ warnings.filterwarnings("ignore")
 HF_TOKEN = os.getenv("HF_TOKEN")
 HF_REPO_ID = os.getenv("HF_REPO_ID", "soradata/alphaedge-data")
 hf_api = HfApi()
+
 
 def upload_to_hf(local_path: Path, hf_filename: str, market_name: str) -> bool:
     """Upload vers le repo Hugging Face, sous data/{market_name}/{hf_filename}."""
@@ -41,6 +43,7 @@ def upload_to_hf(local_path: Path, hf_filename: str, market_name: str) -> bool:
     except Exception as e:
         print(f"Erreur Upload HF ({market_name}/{hf_filename}): {e}")
         return False
+
 
 def load_rebalance_history_from_hf(market_name: str, local_fallback: Path) -> pd.DataFrame:
     """
@@ -74,6 +77,7 @@ def load_rebalance_history_from_hf(market_name: str, local_fallback: Path) -> pd
             pass
 
     return empty
+
 
 # =============================================================================
 # PIPELINE PRINCIPAL (daily run)
@@ -124,6 +128,7 @@ def run_pipeline(market_config: dict) -> None:
             df_monthly_bt,
             model,
             benchmark_ticker=bench_ticker,
+            market_config=market_config,
         )
 
         # 4. Signaux live (séance N)
@@ -135,6 +140,7 @@ def run_pipeline(market_config: dict) -> None:
             daily_prices, 
             model, 
             rebalance_history,
+            market_config,
         )
 
         if signals_df.empty:
@@ -182,6 +188,7 @@ def run_pipeline(market_config: dict) -> None:
     except Exception as e:
         logger.critical(f"CRITICAL FAILURE {market_name}: {e}", exc_info=True)
         raise
+
 
 # =============================================================================
 # ORCHESTRATEUR

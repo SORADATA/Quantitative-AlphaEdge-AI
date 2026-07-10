@@ -41,6 +41,22 @@ jobs:
           MLFLOW_TRACKING_USERNAME: "SORADATA"
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.HF_TOKEN }}
 
+      - name: 📊 Detect processed markets
+        if: always()
+        id: markets
+        run: |
+          MARKETS=$(python -c "
+          import json, glob
+          names = []
+          for f in sorted(glob.glob('config/markets/*.json')):
+              try:
+                  with open(f) as fh:
+                      names.append(json.load(fh).get('market_name', 'UNKNOWN'))
+              except Exception:
+                  pass
+          print(' & '.join(names))
+          ")
+          echo "list=$MARKETS" >> "$GITHUB_OUTPUT"
 
       - name: 📋 Generate job summary
         if: always()
@@ -48,6 +64,5 @@ jobs:
           echo "## AlphaEdge Daily Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Run date**: $(date +'%Y-%m-%d %H:%M %Z')" >> $GITHUB_STEP_SUMMARY
-          echo "- **Market**: CAC40 & US_TECH" >> $GITHUB_STEP_SUMMARY
-          # Ajouter un lien vers le rapport si tu génères un artifact
+          echo "- **Market**: ${{ steps.markets.outputs.list }}" >> $GITHUB_STEP_SUMMARY
           echo "Check the logs above for detailed performance metrics." >> $GITHUB_STEP_SUMMARY
