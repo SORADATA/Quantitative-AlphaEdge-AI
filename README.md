@@ -35,9 +35,9 @@ The current repository is organized around a **CAC40 production setup**, while k
 - Walk-forward validation to evaluate temporal robustness before promotion
 
 ### ⚖️ Portfolio Construction
-- Mean-variance optimization with **PyPortfolioOpt**
-- Ledoit-Wolf covariance shrinkage for more stable risk estimates
-- Monthly rebalancing with transaction cost handling and fallback allocation logic
+- Advanced asset allocation combining **Black-Litterman** (driven by ML upside probabilities) and **EfficientCVaR** (Expected Shortfall) to control extreme risks.
+- Ledoit-Wolf covariance shrinkage for more stable covariance estimates.
+- Monthly rebalancing with transaction cost handling and fallback allocation logic.
 
 ### ☁️ MLOps Workflow
 - MLflow-based registry / promotion workflow for model tracking
