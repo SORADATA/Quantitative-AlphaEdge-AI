@@ -163,8 +163,11 @@ st.sidebar.caption("Disclaimer: Not financial advice.")
 if page == "Dashboard":
     st.title(f"Portfolio Overview - {selected_market}")
     if not df_hist.empty:
-        tot_ret, alpha, sharpe, max_dd, recovery_days = calculate_metrics(df_hist)
-        c1, c2, c3, c4, c5 = st.columns(5)
+        # Récupération des 7 valeurs renvoyées par calculate_metrics()
+        tot_ret, alpha, sharpe, sortino, max_dd, calmar, recovery_days = calculate_metrics(df_hist)
+        
+        # Affichage sur 7 colonnes pour intégrer harmonieusement toutes les métriques avancées
+        c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
         with c1:
             display_kpi_card("Total Return", tot_ret, color_code=True)
         with c2:
@@ -172,8 +175,12 @@ if page == "Dashboard":
         with c3:
             display_kpi_card("Sharpe Ratio", sharpe, is_percent=False)
         with c4:
-            display_kpi_card("Max Drawdown", max_dd, color_code=True)
+            display_kpi_card("Sortino Ratio", sortino, is_percent=False)
         with c5:
+            display_kpi_card("Calmar Ratio", calmar, is_percent=False)
+        with c6:
+            display_kpi_card("Max Drawdown", max_dd, color_code=True)
+        with c7:
             display_kpi_card("Recovery Time", recovery_days, is_percent=False, suffix=" j", minimal=False)
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -350,7 +357,7 @@ elif page == "Model Details":
         ### Hybrid Strategy Components
         **1. XGBoost + LightGBM + Ridge -> LogisticRegression**: Predicts 1-month upside probability
         **2. K-Means**: Market regime detection (RSI-based)
-        **3. Markowitz**: Portfolio optimization (Max Sharpe)
+        **3. Black-Litterman & CVaR**: Advanced portfolio optimization combining AI views and risk minimization
         """)
         st.markdown("---")
 
@@ -399,7 +406,7 @@ elif page == "Model Details":
             fi_df = pd.DataFrame(list(feat_imp.items()), columns=["Feature", "Importance"]).sort_values("Importance", ascending=True)
         else:
             demo_features = ["momentum_3m", "rsi_14", "volume_lag1", "pe_ratio", "book_to_market",
-                              "volatility_60d", "ff_smb", "ff_hml", "earnings_yield", "beta_1y"]
+                             "volatility_60d", "ff_smb", "ff_hml", "earnings_yield", "beta_1y"]
             rng = np.random.default_rng(42)
             demo_vals = np.sort(rng.uniform(0.02, 0.22, size=len(demo_features)))
             fi_df = pd.DataFrame({"Feature": demo_features, "Importance": demo_vals})
