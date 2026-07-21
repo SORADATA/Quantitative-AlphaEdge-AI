@@ -20,6 +20,23 @@ TARGET_CLUSTER:  int = 3
 PROBA_THRESHOLD: float = 0.51
 PROBA_MIN:       float = 0.50
 
+
+# MANAGEMENT COST
+
+TRANSACTION_COST:  float = 0.0010
+MANAGEMENT_FEE_ANNUAL: float = 0.02
+MIN_STOCKS_OPTIM:  int = 3
+MAX_STOCKS_SELECT: int = 10
+WEIGHT_BOUNDS:     tuple = (0.03, 0.20)
+
+SHARPE_THRESHOLD: float = 0.30
+MAX_DD_THRESHOLD: float = -0.40
+
+BACKTEST_YEARS: int = 2
+
+
+# FEATURES
+
 FEATURE_COLS: list[str] = [
     "rsi_lag1", "macd_lag1", "bb_low_lag1", "bb_mid_lag1",
     "bb_high_lag1", "atr_lag1", "cluster_lag1",
@@ -64,15 +81,6 @@ RESAMPLE_LAST_EXCLUDE: list[str] = [
     "euro_volume", "volume", "open", "high", "low", "close",
 ]
 
-TRANSACTION_COST:  float = 0.0010
-MIN_STOCKS_OPTIM:  int = 3
-MAX_STOCKS_SELECT: int = 10
-WEIGHT_BOUNDS:     tuple = (0.03, 0.20)
-
-SHARPE_THRESHOLD: float = 0.30
-MAX_DD_THRESHOLD: float = -0.40
-
-BACKTEST_YEARS: int = 2
 
 FEATURE_GROUPS = {
     "momentum": [
