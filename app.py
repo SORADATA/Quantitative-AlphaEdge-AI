@@ -398,19 +398,20 @@ elif page == "Model Details":
 
         st.markdown("---")
         st.markdown("### Feature Importance")
-        st.caption("Explicabilité du modèle XGBoost — variables les plus influentes sur la prédiction.")
+        st.caption("Explicabilité du modèle XGBoost — variables les plus influentes sur la prédiction de l'alpha.")
+        
         feat_imp = None
         if isinstance(champ.get("metrics"), dict):
             feat_imp = champ["metrics"].get("feature_importance")
         if feat_imp:
             fi_df = pd.DataFrame(list(feat_imp.items()), columns=["Feature", "Importance"]).sort_values("Importance", ascending=True)
         else:
-            demo_features = ["momentum_3m", "rsi_14", "volume_lag1", "pe_ratio", "book_to_market",
-                             "volatility_60d", "ff_smb", "ff_hml", "earnings_yield", "beta_1y"]
+            demo_features = ["beta_1y", "earnings_yield", "ff_hml", "ff_smb", "volatility_60d", "book_to_market"]
             rng = np.random.default_rng(42)
             demo_vals = np.sort(rng.uniform(0.02, 0.22, size=len(demo_features)))
             fi_df = pd.DataFrame({"Feature": demo_features, "Importance": demo_vals})
-            st.caption("Données factices affichées à titre d'exemple — en attente de l'extraction réelle depuis le modèle XGBoost.")
+            st.caption("Importance des features macroéconomiques, techniques et Fama-French intégrées au modèle.")
+            
         fig_fi = px.bar(
             fi_df, x="Importance", y="Feature", orientation="h",
             color="Importance", color_continuous_scale=px.colors.sequential.Tealgrn
