@@ -315,10 +315,10 @@ def _log_and_promote_to_mlflow(
                 try:
                     api = HfApi()
                     # Save on HF
-                    local_model_path = MODEL_DIR / market_name /"ensemble_model.pkl"
+                    local_model_path = MODEL_DIR / market_name / "ensemble_model.pkl"
 
                     api.upload_file(
-                        path_pr_fileobj=str(local_model_path),
+                        path_or_fileobj=str(local_model_path),
                         path_in_repo=f"models/{market_name}/champion.pkl",
                         repo_id="soradata/alphaedge-data",
                         repo_type="dataset",
