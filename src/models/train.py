@@ -30,6 +30,7 @@ from src.features.alpha_features import add_all_features
 from src.models.ensemble import AlphaEdgeEnsemble
 from src.utils.logger import setup_logger
 from src.utils.metrics import calculate_financial_metrics
+from huggingface_hub import HfApi
 
 
 load_dotenv()
@@ -307,9 +308,26 @@ def _log_and_promote_to_mlflow(
             )
 
             if promote:
+                # Promote Mlflow ui
                 client.set_registered_model_alias(registered_model_name, "champion", model_version.version)
                 result.promoted = True
                 logger.info(f"[{market_name}] PROMOTION v{model_version.version} — {reason}")
+                try:
+                    api = HfApi()
+                    # Save on HF
+                    local_model_path = MODEL_DIR / market_name /"ensemble_model.pkl"
+
+                    api.upload_file(
+                        path_pr_fileobj=str(local_model_path),
+                        path_in_repo=f"models/{market_name}/champion.pkl",
+                        repo_id="soradata/alphaedge-data",
+                        repo_type="dataset",
+                        token=HF_TOKEN
+                    )
+                    logger.info(f"[{market_name}] Modèle persistant sauvegardé sur HF Hub ( soradata/alphaedge-data) ")
+                except Exception as e:
+                    logger.error(f"[{market_name}] Sync faillure on Hf Hub : {e}")
+
             else:
                 logger.warning(f"[{market_name}] CHALLENGER REJETÉ — {reason}")
 
