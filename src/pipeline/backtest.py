@@ -70,22 +70,23 @@ def get_optimal_weights(prices_df: pd.DataFrame, probas_subset: Optional[pd.Seri
                     ret_bl, prices_df[valid_tickers].pct_change().dropna(),
                     beta=0.95,
                     weight_bounds=WEIGHT_BOUNDS
-                    )
-                ef.max_quadratic_utility()
+                )
+                ef.min_cvar()
                 return dict(ef.clean_weights()), "black_litterman_cvar"
 
         # Fallback CVaR pur sur l'historique si aucune probabilité ML n'est dispo
         ef = EfficientCVaR(
             prior, prices_df.pct_change().dropna(),
             beta=0.95,
-            weight_bounds=WEIGHT_BOUNDS)
-        ef.max_quadratic_utility()
+            weight_bounds=WEIGHT_BOUNDS
+        )
+        ef.min_cvar()
         return dict(ef.clean_weights()), "min_cvar"
 
     except Exception as exc:
         logger.warning(
             f"Optimisation CVaR/Black-Litterman a échoué ({exc}) -> fallback equal_weight."
-            )
+        )
         return {t: 1.0 / n_assets for t in prices_df.columns}, "equal_weight"
 
 
